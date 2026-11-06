@@ -81,7 +81,7 @@ namespace dvb::HostApi
 			}
 
 			bool RegisterTool(const char* a_name, const char* a_descriptorJson,
-				DevBenchAPI::ToolFn a_handler, void* a_ctx) override
+				DevBenchAPI::ToolFn a_handler, void* a_ctx) override try
 			{
 				if (!g_registry || !a_name || !a_handler)
 					return false;
@@ -93,6 +93,8 @@ namespace dvb::HostApi
 					} catch (...) {
 					}
 				}
+				if (!desc.is_object())
+					desc = json::object();
 				ToolDescriptor d;
 				d.name = a_name;
 				d.description = desc.value("description", std::string{});
@@ -102,6 +104,8 @@ namespace dvb::HostApi
 				const bool isNew = g_registry->Register(std::move(d), MakeHandler(a_handler, a_ctx));
 				NoteRegistration("tool", a_name, !isNew);
 				return isNew;
+			} catch (const std::exception&) {  // a wrong-typed descriptor field must not unwind into the calling plugin
+				return false;
 			}
 
 			bool RegisterMenuHandler(const char* a_menuName, const char* a_descriptorJson,
@@ -168,7 +172,7 @@ namespace dvb::HostApi
 		void* GetApi(unsigned int a_revision)
 		{
 			// Only revision 1 exists; future revisions return a derived interface.
-			return a_revision >= 1 ? static_cast<DevBenchAPI::IDevBenchInterface001*>(&g_interface) : nullptr;
+			return a_revision == 1 ? static_cast<DevBenchAPI::IDevBenchInterface001*>(&g_interface) : nullptr;
 		}
 
 		// Self-test: register a trivial tool THROUGH the public interface, proving the

@@ -772,6 +772,27 @@ namespace dvb::Recording
 			return s;
 		}
 
+		// Temp file + rename, so a crash or full disk can't leave a truncated recording.
+		void WriteFileAtomic(const fs::path& a_path, const std::string& a_contents)
+		{
+			std::error_code ec;
+			const fs::path  temporary = a_path.string() + ".tmp";
+			{
+				std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+				if (!out)
+					throw std::runtime_error(std::format("could not open temporary recording file: {}", temporary.string()));
+				out.write(a_contents.data(), static_cast<std::streamsize>(a_contents.size()));
+				out.flush();
+				if (!out)
+					throw std::runtime_error(std::format("could not flush temporary recording file: {}", temporary.string()));
+			}
+			fs::rename(temporary, a_path, ec);
+			if (ec)
+				throw std::runtime_error(std::format("could not publish recording file: {}", ec.message()));
+			if (!fs::exists(a_path, ec) || ec || fs::file_size(a_path, ec) != a_contents.size() || ec)
+				throw std::runtime_error("recording file verification failed after publication");
+		}
+
 		fs::path WriteScenarioFile(const json& a_scenario)
 		{
 			const fs::path  dir = "Data/SKSE/Plugins/devbench/recordings";
@@ -779,24 +800,9 @@ namespace dvb::Recording
 			fs::create_directories(dir, ec);
 			if (ec)
 				throw std::runtime_error(std::format("could not create recording directory: {}", ec.message()));
-			const auto        stamp = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-			const fs::path    path = dir / std::format("recording_{}.json", stamp);
-			const fs::path    temporary = path.string() + ".tmp";
-			const std::string serialized = SerializeRecording(a_scenario);
-			{
-				std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-				if (!out)
-					throw std::runtime_error(std::format("could not open temporary recording file: {}", temporary.string()));
-				out.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
-				out.flush();
-				if (!out)
-					throw std::runtime_error(std::format("could not flush temporary recording file: {}", temporary.string()));
-			}
-			fs::rename(temporary, path, ec);
-			if (ec)
-				throw std::runtime_error(std::format("could not publish recording file: {}", ec.message()));
-			if (!fs::exists(path, ec) || ec || fs::file_size(path, ec) != serialized.size() || ec)
-				throw std::runtime_error("recording file verification failed after publication");
+			const auto     stamp = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+			const fs::path path = dir / std::format("recording_{}.json", stamp);
+			WriteFileAtomic(path, SerializeRecording(a_scenario));
 			return path;
 		}
 	}
@@ -1708,10 +1714,11 @@ namespace dvb::Recording
 			const bool     value = a_args.value("value", true);
 			json           rec = load(p);
 			rec["meta"]["validated"] = value;
-			std::ofstream out(p, std::ios::trunc);
-			if (!out)
-				throw ToolError(500, "could not write recording");
-			out << SerializeRecording(rec);
+			try {
+				WriteFileAtomic(p, SerializeRecording(rec));
+			} catch (const std::exception& e) {
+				throw ToolError(500, e.what());
+			}
 			return json{ { "file", p.filename().string() }, { "validated", value } };
 		}
 

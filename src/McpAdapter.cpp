@@ -15,6 +15,7 @@ namespace dvb
 
 	McpAdapter::~McpAdapter()
 	{
+		m_registry.SetRegistrationListener(nullptr);  // the listener captures `this`
 		if (m_sub)
 			m_events.Unsubscribe(m_sub);  // bus worker won't call our callback after this returns
 	}

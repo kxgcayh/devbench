@@ -129,7 +129,7 @@ namespace dvb::Capture
 		void ValidatePathSegment(std::string_view a_field, const std::string& a_value)
 		{
 			if (a_value.empty() || a_value == "." || a_value == ".." ||
-				a_value.find('/') != std::string::npos || a_value.find('\\') != std::string::npos)
+				std::ranges::any_of(a_value, [](char c) { return c == '/' || c == '\\' || c == ':'; }))  // ':' = drive root or NTFS stream
 				throw ToolError(400, std::format("invalid '{}': must be a single path segment (no '/', '\\\\', '.', or '..')", a_field));
 		}
 
@@ -803,6 +803,12 @@ namespace dvb::Capture
 			// capture.ready event before an after-the-fact snapshot, causing a false timeout.
 			const std::uint64_t sinceSeq = g_events ? g_events->HeadSeq() : 0;
 
+			// A leftover file from an earlier run would satisfy the poll fallback (exists + stable
+			// size) and be scored as the new capture.
+			{
+				std::error_code ec;
+				fs::remove(outputPath, ec);
+			}
 			const json queued = entry->handler(providerArgs, a_ctx);
 			if (queued.contains("error"))
 				throw ToolError(502, queued.value("error", std::string("capture provider failed")));

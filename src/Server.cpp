@@ -1,5 +1,6 @@
 #include "Server.h"
 
+#include "LoopbackGuard.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
 #include "Version.h"
@@ -156,6 +157,13 @@ namespace dvb
 			// before giving up with an empty 400. Shorten this so that mistake fails fast
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
+			http->set_pre_routing_handler([](const httplib::Request& a_req, httplib::Response& a_res) {
+				if (IsLocalRequest(a_req.get_header_value("Host"), a_req.get_header_value("Origin")))
+					return httplib::Server::HandlerResponse::Unhandled;
+				a_res.status = 403;
+				a_res.set_content("{\"error\":\"forbidden: non-local Origin/Host\"}", "application/json");
+				return httplib::Server::HandlerResponse::Handled;
+			});
 			m_restAdapter->Mount(*http);
 		} else
 			logs::warn("devbench: cpp-mcp http() returned null; REST facade unavailable");
@@ -187,12 +195,12 @@ namespace dvb
 
 	void Server::Stop()
 	{
+		m_mcpAdapter.reset();  // before the server: its bus subscriber broadcasts through m_mcp
 		if (m_mcp) {
 			m_mcp->stop();
 			m_mcp.reset();
 		}
 		m_restAdapter.reset();
-		m_mcpAdapter.reset();
 		g_boundPort.store(0);
 		g_registry.store(nullptr);
 	}

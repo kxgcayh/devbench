@@ -3665,9 +3665,8 @@ namespace dvb
 				if (!a_args.contains("steps") || !a_args["steps"].is_array())
 					throw ToolError(400, "action='run' requires a 'steps' array");
 
-				uint64_t runId = a_args.value("runId", static_cast<uint64_t>(0));
-				if (!runId)
-					runId = RunRegistry::Get().NextId();
+				// Always server-assigned: a caller-chosen id could collide with a live replay's run.
+				const uint64_t runId = RunRegistry::Get().NextId();
 				json argsWithId = a_args;
 				argsWithId["runId"] = runId;
 				const size_t numSteps = argsWithId["steps"].size();

@@ -481,7 +481,7 @@ namespace dvb::Papyrus
 				}
 			} else {
 				const std::string ref =
-					a_self.is_string() ? a_self.get<std::string>() : (a_self.is_object() && a_self.contains("form") ? a_self["form"].get<std::string>() : std::string{});
+					a_self.is_string() ? a_self.get<std::string>() : (a_self.is_object() && a_self.contains("form") ? a_self["form"].is_string() ? a_self["form"].get<std::string>() : std::string{} : std::string{});
 				if (ref.empty()) {
 					a_err = "self must be \"selected\" or { \"form\": \"0x.. | EditorID\" }";
 					return false;
@@ -655,6 +655,8 @@ namespace dvb::Papyrus
 					state->filledNames = std::move(names);
 				} catch (const ToolError& e) {
 					fail(e.code, e.what());
+				} catch (const std::exception& e) {  // an SKSE task does not catch: this would crash the game
+					fail(400, e.what());
 				}
 			});
 
