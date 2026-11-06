@@ -75,7 +75,7 @@ namespace dvb::ConsoleLogCapture
 				const auto* fmt = reinterpret_cast<const char*>(a_ctx.Rdx);
 				if (!fmt)
 					return;
-				const auto   args = reinterpret_cast<std::va_list>(a_ctx.R8);
+				auto         args = reinterpret_cast<std::va_list>(a_ctx.R8);
 				char         head[1024];
 				std::va_list first;
 				va_copy(first, args);
@@ -242,13 +242,13 @@ namespace dvb::ConsoleLogCapture
 		{
 			std::this_thread::sleep_for(kLookInterval);
 			try {
-				LookView view;
-				MainThread::RunAndWait([&view]() -> json {
-					view = LookAtSources();
+				auto view = std::make_shared<LookView>();
+				MainThread::RunAndWait([view]() -> json {
+					*view = LookAtSources();
 					return true;
 				},
 					kLookTimeout);
-				return view;
+				return *view;
 			} catch (const ToolError& e) {
 				logs::warn("devbench: console capture stopped looking: {}", e.what());
 				return std::nullopt;

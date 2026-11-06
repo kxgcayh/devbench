@@ -978,7 +978,7 @@ namespace dvb::Recording
 		if (action == "stop") {
 			{
 				std::lock_guard lock(rec.mtx);
-				if (rec.state != RecorderState::running)
+				if (rec.state != RecorderState::running && rec.state != RecorderState::stopping)
 					return json{ { "error", "not recording" }, { "state", RecorderStateName(rec.state) } };
 				rec.state = RecorderState::stopping;
 				rec.running.store(false, std::memory_order_relaxed);
@@ -987,8 +987,11 @@ namespace dvb::Recording
 			if (rec.worker.joinable())
 				rec.worker.join();  // sampler done → samples are stable, no lock needed below
 
-			const json collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
-			rec.activityEvents.assign(collapsedActivity.begin(), collapsedActivity.end());
+			{
+				std::lock_guard lock(rec.mtx);
+				const json collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
+				rec.activityEvents.assign(collapsedActivity.begin(), collapsedActivity.end());
+			}
 
 			const long recordedMs = static_cast<long>(
 				duration_cast<milliseconds>(steady_clock::now() - rec.startTick).count());
@@ -998,9 +1001,8 @@ namespace dvb::Recording
 				scenario = BuildScenario(rec, recordedMs);
 				path = WriteScenarioFile(scenario);
 			} catch (const std::exception& e) {
-				std::lock_guard lock(rec.mtx);
-				rec.state = RecorderState::idle;
-				throw ToolError(500, std::format("recording stopped but could not be persisted: {}", e.what()));
+				// Keep rec.state as stopping so samples are not lost; caller can retry 'record stop'
+				throw ToolError(500, std::format("recording stopped but could not be persisted: {}. Retry 'record stop' to save.", e.what()));
 			}
 
 			// generic_string(), not string(): a bare `dir / filename` join uses the native
@@ -1588,6 +1590,8 @@ namespace dvb::Recording
 		if (!vrPlan.value("step", json(nullptr)).is_null())
 			steps.push_back(vrPlan["step"]);
 		for (const auto& s : trajectory) {
+			if (s.contains("atMs") && s["atMs"].is_number())
+				cumMs = std::max(cumMs, s["atMs"].get<long>());
 			steps.push_back(s);
 			if (s.contains("wait"))
 				cumMs += s["wait"].get<long>();

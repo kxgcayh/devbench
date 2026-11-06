@@ -4,6 +4,7 @@
 #include "MainThread.h"
 #include "PapyrusDefaults.h"
 #include "ToolRegistry.h"
+#include "VRInputState.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -395,7 +396,7 @@ namespace dvb::Papyrus
 		json HandleList(const json& a_args)
 		{
 			const std::string filter = a_args.value("filter", std::string{});
-			const int         limit = a_args.value("limit", 200);
+			const int         limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 200, 1, 100000));
 			return MainThread::RunAndWait([filter, limit]() -> json {
 				auto*                    vm = GetVM();
 				const std::string        needle = Lower(filter);
@@ -542,7 +543,7 @@ namespace dvb::Papyrus
 			const std::string function = a_args.value("function", std::string{});
 			if (script.empty() || function.empty())
 				throw ToolError(400, "papyrus call requires 'script' and 'function'");
-			const int  timeoutMs = a_args.value("timeoutMs", 3000);
+			const int  timeoutMs = static_cast<int>(ParseBoundedIntegerArgument(a_args, "timeoutMs", 3000, 50, 60000));
 			const json argsJson = a_args.contains("args") ? a_args["args"] : json::array();
 			if (!argsJson.is_array())
 				throw ToolError(400, "papyrus call: 'args' must be an array");

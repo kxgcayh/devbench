@@ -44,9 +44,10 @@ namespace dvb
 
 			// A tool was added or replaced (e.g. a mod registered an inspect kind / menu, which also
 			// re-registers the enriched base-tool descriptor). Tell connected clients to re-list.
+			// Broadcast off-thread via EventBus so we never do synchronous socket writes on the
+			// caller's thread (which can be the game main thread at kDataLoaded).
 			if (m_announceChanges)
-				m_server.broadcast_notification(mcp::request::create_notification(
-					"notifications/tools/list_changed", json::object()));
+				m_events.Publish("devbench/tools_changed", json::object());
 		};
 
 		for (const auto& desc : m_registry.List())
@@ -60,9 +61,18 @@ namespace dvb
 
 		// Forward bus events to connected MCP clients as notifications.
 		m_sub = m_events.Subscribe([this](const EventBus::Event& a_ev) {
+			if (a_ev.topic == "devbench/tools_changed") {
+				m_server.broadcast_notification(mcp::request::create_notification(
+					"notifications/tools/list_changed", json::object()));
+				return;
+			}
 			m_server.broadcast_notification(mcp::request::create_notification(
 				"notifications/message",
-				json{ { "topic", a_ev.topic }, { "seq", a_ev.seq }, { "data", a_ev.payload } }));
+				json{
+					{ "level", "info" },
+					{ "logger", "devbench" },
+					{ "data", json{ { "topic", a_ev.topic }, { "seq", a_ev.seq }, { "data", a_ev.payload } } }
+				}));
 		});
 	}
 }

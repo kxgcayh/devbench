@@ -17,12 +17,30 @@ namespace
 	// task finished ON the main thread; g_pendingTasks is queued-but-not-yet-finished.
 	std::atomic<int> g_lastTaskFrame{ -1 };
 	std::atomic<int> g_pendingTasks{ 0 };
+	std::atomic<std::thread::id> g_mainThreadId{};
 }
 
 namespace dvb::MainThread
 {
+	void SetMainThread()
+	{
+		g_mainThreadId.store(std::this_thread::get_id(), std::memory_order_relaxed);
+	}
+
+	bool IsMainThread()
+	{
+		const auto id = g_mainThreadId.load(std::memory_order_relaxed);
+		return id != std::thread::id{} && std::this_thread::get_id() == id;
+	}
+
 	json RunAndWait(std::function<json()> a_fn, std::chrono::milliseconds a_timeout, const std::atomic<bool>* a_keepWaiting, Queue a_queue)
 	{
+		if (IsMainThread()) {
+			// Already running on the main thread; queuing a task and waiting would deadlock.
+			// Run inline directly.
+			return a_fn();
+		}
+
 		auto* task = SKSE::GetTaskInterface();
 		if (!task)
 			throw ToolError(500, "SKSE TaskInterface unavailable");
@@ -35,6 +53,7 @@ namespace dvb::MainThread
 
 		g_pendingTasks.fetch_add(1, std::memory_order_relaxed);
 		auto run = [invocation]() {
+			g_mainThreadId.store(std::this_thread::get_id(), std::memory_order_relaxed);
 			// Stamp completion + drop the pending count on the main thread whether fn()
 			// returns or throws — a routine ToolError must not leave the markers looking
 			// like a stalled queue.

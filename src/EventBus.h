@@ -108,6 +108,8 @@ namespace dvb
 				while (m_recent.size() > kMaxRecent)
 					m_recent.erase(m_recent.begin());
 				m_deliverQueue.push_back(ev);  // hand off; worker delivers
+				while (m_deliverQueue.size() > kMaxDeliverQueue)
+					m_deliverQueue.pop_front();
 			}
 			m_cv.notify_one();
 		}
@@ -130,7 +132,8 @@ namespace dvb
 		}
 
 	private:
-		static constexpr size_t kMaxRecent = 256;  // bounded; oldest dropped first
+		static constexpr size_t kMaxRecent = 256;        // bounded; oldest dropped first
+		static constexpr size_t kMaxDeliverQueue = 1024;  // bounded; prevents unbounded memory growth if worker stalls
 
 		// Drains the delivery queue and notifies subscribers off the publisher's thread.
 		void DeliverLoop()

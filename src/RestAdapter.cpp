@@ -124,7 +124,9 @@ namespace dvb
 			uint64_t since = 0;
 			if (req.has_param("since")) {
 				try {
-					since = std::stoull(req.get_param_value("since"));
+					const auto param = req.get_param_value("since");
+					if (!param.empty() && param[0] != '-')
+						since = std::stoull(param);
 				} catch (...) {
 				}
 			}

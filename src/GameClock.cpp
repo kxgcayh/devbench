@@ -21,6 +21,7 @@ namespace dvb::GameClock
 		std::atomic<double> g_gameMs{ 0.0 };
 		std::atomic<int>    g_engaged{ 0 };
 		std::atomic<bool>   g_rebase{ false };
+		std::atomic<bool>   g_tickQueued{ false };
 
 		std::mutex              g_pumpMutex;
 		std::condition_variable g_pumpCv;
@@ -47,8 +48,16 @@ namespace dvb::GameClock
 				}
 				while (g_engaged.load(std::memory_order_acquire) > 0) {
 					std::this_thread::sleep_for(std::chrono::milliseconds(kTickPumpMs));
-					if (auto* task = SKSE::GetTaskInterface())
-						task->AddTask([] { Tick(); });
+					if (!g_tickQueued.exchange(true, std::memory_order_acq_rel)) {
+						if (auto* task = SKSE::GetTaskInterface()) {
+							task->AddTask([] {
+								g_tickQueued.store(false, std::memory_order_release);
+								Tick();
+							});
+						} else {
+							g_tickQueued.store(false, std::memory_order_release);
+						}
+					}
 				}
 			}
 		}

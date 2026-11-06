@@ -394,25 +394,31 @@ namespace dvb::Recording
 		report["replayedKeyboardTransitions"] = 0;
 		report["skippedInput"] = report.value("input", 0);
 
-		if (!a_replayInputs || !a_events.is_array())
+		const bool hasAtMs = a_steps.is_array() && std::any_of(a_steps.begin(), a_steps.end(), [](const json& s) {
+			return s.contains("atMs");
+		});
+
+		if ((!a_replayInputs || !a_events.is_array()) && !hasAtMs)
 			return json{ { "steps", a_steps }, { "report", std::move(report) }, { "inputOwner", "" } };
 
 		std::vector<json> replayable;
 		std::size_t       suppressedHotkeys = 0;
-		for (const auto& event : CollapseConsoleTyping(a_events)) {
-			if (!IsKeyboardTransition(event))
-				continue;
-			if (IsKeyEventFor(event, a_reservedKeys)) {
-				++suppressedHotkeys;
-				continue;
+		if (a_replayInputs && a_events.is_array()) {
+			for (const auto& event : CollapseConsoleTyping(a_events)) {
+				if (!IsKeyboardTransition(event))
+					continue;
+				if (IsKeyEventFor(event, a_reservedKeys)) {
+					++suppressedHotkeys;
+					continue;
+				}
+				replayable.push_back(event);
 			}
-			replayable.push_back(event);
+			std::stable_sort(replayable.begin(), replayable.end(), [](const json& a, const json& b) {
+				const auto at = a.value("tMs", static_cast<std::int64_t>(0));
+				const auto bt = b.value("tMs", static_cast<std::int64_t>(0));
+				return at != bt ? at < bt : a.value("seq", 0ull) < b.value("seq", 0ull);
+			});
 		}
-		std::stable_sort(replayable.begin(), replayable.end(), [](const json& a, const json& b) {
-			const auto at = a.value("tMs", static_cast<std::int64_t>(0));
-			const auto bt = b.value("tMs", static_cast<std::int64_t>(0));
-			return at != bt ? at < bt : a.value("seq", 0ull) < b.value("seq", 0ull);
-		});
 
 		std::int64_t traceEndMs = 0;
 		if (a_steps.is_array())

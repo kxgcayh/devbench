@@ -427,9 +427,7 @@ namespace dvb
 				}
 				const size_t matched = entries.size();  // post-filter, pre-limit — see count/truncated below
 				if (a_args.contains("limit")) {
-					const int limit = a_args["limit"].get<int>();
-					if (limit <= 0)
-						throw ToolError(400, std::format("invalid limit '{}' (must be > 0)", limit));
+					const int limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 1, 100000));
 					if (static_cast<size_t>(limit) < entries.size())
 						entries.resize(limit);
 				}
@@ -480,10 +478,11 @@ namespace dvb
 						// absorbed above instead of left for the engine to see, walk them by hand so
 						// Calendar.GetMonth/GetYear don't go stale after a multi-day jump.
 						if (cal->gameDay && cal->gameMonth && cal->gameYear) {
-							auto day = static_cast<std::int32_t>(cal->gameDay->value);
-							auto month = static_cast<std::int32_t>(cal->gameMonth->value);  // 0-11
+							auto day = std::clamp(static_cast<std::int32_t>(cal->gameDay->value), 1, 31);
+							auto month = std::clamp(static_cast<std::int32_t>(cal->gameMonth->value), 0, 11);  // 0-11
 							auto year = static_cast<std::int32_t>(cal->gameYear->value);
 							for (auto remaining = dayDelta; remaining > 0; --remaining) {
+								month = std::clamp(month, 0, 11);
 								if (day < RE::Calendar::DAYS_IN_MONTH[month]) {
 									++day;
 								} else {
@@ -498,9 +497,11 @@ namespace dvb
 								if (day > 1) {
 									--day;
 								} else {
-									if (month-- == 0) {
+									if (month <= 0) {
 										month = 11;
 										--year;
+									} else {
+										--month;
 									}
 									day = RE::Calendar::DAYS_IN_MONTH[month];
 								}
@@ -816,12 +817,16 @@ namespace dvb
 				}
 				// Answer the active MessageBoxMenu by button index (default 0) via CommonLib's
 				// SelectOption() — runs the modal's callback and dismisses it; no detour.
-				const int index = a_args.value("index", 0);
-				auto*     task = SKSE::GetTaskInterface();
-				if (!task)
-					throw ToolError(500, "SKSE TaskInterface unavailable");
-				task->AddTask([index]() { RE::MessageBoxMenu::SelectOption(index); });
-				return json{ { "queued", true }, { "action", "accept" }, { "index", index } };
+				const int index = static_cast<int>(ParseBoundedIntegerArgument(a_args, "index", 0, 0, 100));
+				return MainThread::RunAndWait([index]() -> json {
+					auto* data = RE::MessageBoxMenu::GetCurrentMessageBoxData();
+					if (!data)
+						return json{ { "accepted", false }, { "reason", "no active MessageBoxMenu" } };
+					if (static_cast<size_t>(index) >= data->buttonText.size())
+						return json{ { "accepted", false }, { "reason", std::format("button index {} out of range (menu has {} buttons)", index, data->buttonText.size()) } };
+					RE::MessageBoxMenu::SelectOption(index);
+					return json{ { "accepted", true }, { "index", index } };
+				});
 			}
 
 			throw ToolError(400, std::format("unknown action '{}' (list|open|close|describe|accept|invoke)", action));
@@ -1550,9 +1555,7 @@ namespace dvb
 			if (kind == "inventory") {
 				const std::string formId = a_args.value("formId", std::string{});
 				const std::string typeFilter = a_args.value("formType", std::string{});
-				const int         limit = a_args.value("limit", 100);
-				if (limit < 0)
-					throw ToolError(400, "inspect inventory: 'limit' must be >= 0");
+				const int         limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				return MainThread::RunAndWait([=]() -> json {
 					auto lower = [](std::string s) {
 						std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1606,9 +1609,7 @@ namespace dvb
 			// quests: the journal — quests that are running or completed, each with its current stage
 			// and non-dormant objectives. 'active' marks the player's tracked quest. 'limit' default 100.
 			if (kind == "quests") {
-				const int limit = a_args.value("limit", 100);
-				if (limit < 0)
-					throw ToolError(400, "inspect quests: 'limit' must be >= 0");
+				const int limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				return MainThread::RunAndWait([=]() -> json {
 					auto* dh = RE::TESDataHandler::GetSingleton();
 					if (!dh)
@@ -1851,11 +1852,9 @@ namespace dvb
 				const std::string typeFilter = a_args.value("formType", std::string{});
 				const std::string modelFilter = a_args.value("model", std::string{});
 				const double      radius = a_args.value("radius", 0.0);
-				const int         limit = a_args.value("limit", 100);
+				const int         limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				if (radius < 0.0)
 					throw ToolError(400, "inspect refs: 'radius' must be >= 0 (0 scans the whole loaded grid)");
-				if (limit < 0)
-					throw ToolError(400, "inspect refs: 'limit' must be >= 0");
 				return MainThread::RunAndWait([=]() -> json {
 					auto lower = [](std::string s) {
 						std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -2759,7 +2758,7 @@ namespace dvb
 						} else if (step.contains("waitFor")) {
 							const WaitForSpec spec = ParseWaitFor(step);
 							const long        timeoutMs = step.value("timeoutMs", static_cast<long>(60000));
-							const long        pollMs = step.value("pollMs", static_cast<long>(100));
+							const long        pollMs = std::max(10L, step.value("pollMs", static_cast<long>(100)));
 							r["kind"] = "waitFor";
 							r["topic"] = spec.topic;
 							r["match"] = spec.match;
@@ -2792,7 +2791,7 @@ namespace dvb
 						} else if (step.contains("waitUntil")) {
 							const std::string cond = step["waitUntil"].get<std::string>();
 							const long        timeoutMs = step.value("timeoutMs", static_cast<long>(30000));
-							const long        pollMs = step.value("pollMs", static_cast<long>(250));
+							const long        pollMs = std::max(10L, step.value("pollMs", static_cast<long>(250)));
 							r["kind"] = "waitUntil";
 							r["cond"] = cond;
 							bool       satisfied = false;

@@ -2,6 +2,7 @@
 
 #include "GfxLogic.h"
 #include "MainThread.h"
+#include "VRInputState.h"
 
 #include <algorithm>
 #include <string>
@@ -137,8 +138,8 @@ namespace dvb::Gfx
 			if (op == "get") {
 				RE::GFxValue value;
 				Resolve(a_movie, segments, segments.size(), value);
-				const int  depth = std::clamp(a_args.value("depth", kDefaultDepth), 0, kMaxDepth);
-				const auto limit = a_args.value("limit", kDefaultLimit);
+				const int  depth = static_cast<int>(ParseBoundedIntegerArgument(a_args, "depth", kDefaultDepth, 0, kMaxDepth));
+				const auto limit = static_cast<std::uint32_t>(ParseBoundedIntegerArgument(a_args, "limit", kDefaultLimit, 1, 100000));
 				json       result = { { "ok", true }, { "value", ToJson(value, depth, limit, budget) } };
 				result["nodes"] = budget.nodes;
 				result["truncated"] = budget.truncated;

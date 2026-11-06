@@ -23,6 +23,12 @@ namespace dvb::MainThread
 		kUi
 	};
 
+	/// Record the calling thread as the main thread (called at plugin load).
+	void SetMainThread();
+
+	/// True if the caller is currently on the game's main thread.
+	bool IsMainThread();
+
 	/// Run `a_fn` on the main game thread (via SKSE's TaskInterface) and block the
 	/// calling (listener) thread until it returns, propagating its JSON result — or
 	/// rethrowing whatever it threw (e.g. a dvb::ToolError) on the caller's thread.
