@@ -72,9 +72,9 @@ namespace dvb
 	{
 		if (!Busy())
 			return VRSequenceStopAccess::kNotActive;
-		if (a_force && !a_internal)
+		if (a_force && !a_internal && a_owner != m_owner)
 			return VRSequenceStopAccess::kForceRequiresInternal;
-		if (!a_internal && a_controlToken != m_controlToken)
+		if (!a_internal && !(a_force && a_owner == m_owner) && a_controlToken != m_controlToken)
 			return VRSequenceStopAccess::kControlTokenMismatch;
 		if (!a_force && a_owner != m_owner)
 			return VRSequenceStopAccess::kOwnerMismatch;

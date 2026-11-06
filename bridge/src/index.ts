@@ -106,10 +106,14 @@ async function main(): Promise<void> {
         content: [{ type: "text", text: JSON.stringify(result ?? null) }],
       };
     } catch (e) {
-      const message =
-        e instanceof GameUnavailableError
-          ? `game not running (target: ${target.label})`
-          : (e as Error).message;
+      let message: string;
+      if (e instanceof GameUnavailableError) {
+        message = `game not running (target: ${target.label})`;
+      } else if (e instanceof Error) {
+        message = e.message;
+      } else {
+        message = String(e);
+      }
       return {
         content: [
           {

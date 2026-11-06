@@ -10,7 +10,6 @@
 #include "Capture.h"
 #include "ConsoleLogCapture.h"
 #include "DifficultyLogic.h"
-#include "Gfx.h"
 #include "DrawStats.h"
 #include "DrawStatsLogic.h"
 #include "EventBus.h"
@@ -19,6 +18,7 @@
 #include "FreeCamera.h"
 #include "GameEvents.h"
 #include "GameState.h"
+#include "Gfx.h"
 #include "HeldLightsLogic.h"
 #include "HostApi.h"
 #include "InspectLogic.h"
@@ -29,6 +29,7 @@
 #include "Recording.h"
 #include "ReplayDriver.h"
 #include "ReplayTrajectory.h"
+#include "RunRegistry.h"
 #include "ScenarioPolicy.h"
 #include "Server.h"
 #include "TimeScaleControl.h"
@@ -1352,7 +1353,9 @@ namespace dvb
 				{ "misc", "misc" }, { "light", "ligh" }, { "furniture", "furn" },
 				{ "activator", "acti" }, { "flora", "flor" }, { "tree", "tree" },
 				{ "static", "stat" }, { "key", "keym" }, { "scroll", "scrl" },
-				{ "ammo", "ammo" }, { "soulgem", "slgm" }
+				{ "ammo", "ammo" }, { "soulgem", "slgm" },
+				{ "armoraddon", "arma" }, { "armature", "arma" },
+				{ "headpart", "hdpt" }, { "head", "hdpt" }, { "idle", "idle" }
 			};
 			if (auto it = kAlias.find(a_filter); it != kAlias.end())
 				return it->second;
@@ -2520,92 +2523,6 @@ namespace dvb
 			}
 		};
 
-		// Tracks in-flight/completed async runs — record{action:"replay"} (async by default) and
-		// scenario{action:"run", async:true} share this registry and its runId space, so a runId
-		// from either polls correctly via either tool's action="status". Entries are pruned once
-		// the retention cap is hit so a caller that never polls a finished run doesn't leak state.
-		class RunRegistry
-		{
-		public:
-			static RunRegistry& Get()
-			{
-				static RunRegistry inst;
-				return inst;
-			}
-
-			uint64_t NextId() { return ++m_seq; }
-
-			void Start(uint64_t a_runId)
-			{
-				std::lock_guard lock(m_mtx);
-				m_runs.emplace(a_runId, State{});
-				Prune();
-			}
-
-			// `st.ok` reflects the result's own "ok" field when present (a scenario/replay run
-			// that completed without throwing but failed an assertion has result.ok=false — that
-			// must not be reported as a top-level ok:true) rather than just "didn't throw".
-			void Finish(uint64_t a_runId, json a_result)
-			{
-				std::lock_guard lock(m_mtx);
-				State&          st = m_runs[a_runId];
-				st.done = true;
-				st.ok = a_result.is_object() ? a_result.value("ok", true) : true;
-				st.result = std::move(a_result);
-				st.hasResult = true;
-			}
-
-			void Fail(uint64_t a_runId, std::string a_error)
-			{
-				std::lock_guard lock(m_mtx);
-				State&          st = m_runs[a_runId];
-				st.done = true;
-				st.ok = false;
-				st.error = std::move(a_error);
-			}
-
-			// hasResult (Finish, even with ok:false — a failed assertion, not a thrown exception)
-			// vs error-only (Fail — the run itself threw) are distinct outcomes; conflating them
-			// on `ok` alone would discard the actual transcript for a failed-but-completed run.
-			std::optional<json> Status(uint64_t a_runId)
-			{
-				std::lock_guard lock(m_mtx);
-				const auto      it = m_runs.find(a_runId);
-				if (it == m_runs.end())
-					return std::nullopt;
-				const State& st = it->second;
-				if (!st.done)
-					return json{ { "runId", a_runId }, { "done", false } };
-				json out{ { "runId", a_runId }, { "done", true }, { "ok", st.ok } };
-				out[st.hasResult ? "result" : "error"] = st.hasResult ? st.result : json(st.error);
-				return out;
-			}
-
-		private:
-			struct State
-			{
-				bool        done = false;
-				bool        ok = false;
-				bool        hasResult = false;
-				json        result;
-				std::string error;
-			};
-
-			// runId is a monotonic counter, so the smallest key is the oldest run. Never erase an
-			// in-flight (!done) one — Finish/Fail would recreate it via operator[], and a poll in
-			// between would 404 on a run that's actually still executing.
-			void Prune()
-			{
-				constexpr size_t kRetention = 128;  // shared by two tools now; headroom over the old 64
-				for (auto it = m_runs.begin(); m_runs.size() > kRetention && it != m_runs.end();)
-					it = it->second.done ? m_runs.erase(it) : std::next(it);
-			}
-
-			std::atomic<uint64_t>     m_seq{ 0 };
-			std::mutex                m_mtx;
-			std::map<uint64_t, State> m_runs;
-		};
-
 		/// Which steps of a scenario run hold the recorder's replay mark.
 		enum class ReplayMarking
 		{
@@ -2617,6 +2534,7 @@ namespace dvb
 		{
 			ReplayMarking                    replayMarking = ReplayMarking::TrajectorySpan;
 			std::function<void(std::size_t)> beforeStep;  // called with each step's index right before it runs
+			std::function<bool()>            isCancelled;
 		};
 
 		/// Execute a scenario step list and return its complete transcript.
@@ -2639,10 +2557,19 @@ namespace dvb
 			// scenario tool wrapper and record.replay) always supply one.
 			const uint64_t runId = a_args.value("runId", static_cast<uint64_t>(0));
 
+			const auto checkCancelled = [&]() -> bool {
+				if (a_options.isCancelled && a_options.isCancelled())
+					return true;
+				if (runId != 0 && RunRegistry::Get().IsCancelled(runId))
+					return true;
+				return false;
+			};
+
 			json       results = json::array();
 			const auto t0 = steady_clock::now();
 			bool       anyFailure = false;
 			bool       aborted = false;
+			bool       cancelled = false;
 
 			// While the player is teleported along a trajectory, a recording running beside it must
 			// not re-sample the path: the issued setpos commands (seen by the console hook) carry it.
@@ -2654,12 +2581,20 @@ namespace dvb
 
 			Recording::ReplayDriver::Playback playback(steps, a_args.value("smoothPose", false));
 
-			for (int rep = 0; rep < repeat && !aborted; ++rep) {
+			for (int rep = 0; rep < repeat && !aborted && !cancelled; ++rep) {
+				if (checkCancelled()) {
+					cancelled = true;
+					break;
+				}
 				playback.Finish();
 				// Per-repetition, not per-run: a scene mismatch on rep N must not poison rep N+1's
 				// captures if rep N+1's own scene assert succeeds.
 				bool runSceneMismatch = false;
-				for (size_t i = 0; i < steps.size() && !aborted; ++i) {
+				for (size_t i = 0; i < steps.size() && !aborted && !cancelled; ++i) {
+					if (checkCancelled()) {
+						cancelled = true;
+						break;
+					}
 					if (a_options.beforeStep)
 						a_options.beforeStep(i);
 					const json& step = steps[i];
@@ -2701,8 +2636,18 @@ namespace dvb
 						if (playback.Handle(step)) {
 							r["kind"] = "pose";
 							r["ok"] = true;
-							if (step.contains("wait") && !playback.Sleep(step["wait"].get<long>()))
-								throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+							if (step.contains("wait")) {
+								const long waitMs = step["wait"].get<long>();
+								if (!playback.Sleep(waitMs, checkCancelled)) {
+									if (checkCancelled()) {
+										cancelled = true;
+										r["cancelled"] = true;
+										r["ok"] = false;
+										break;
+									}
+									throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+								}
+							}
 						} else if (step.contains("pose")) {
 							// Compact trajectory sample [x, y, z, yawDeg, pitchDeg] → the same
 							// player.setpos/setangle commands v1 stored as five steps (Recording::BuildScenario).
@@ -2745,15 +2690,32 @@ namespace dvb
 							}
 							if (poseOk) {
 								r["ok"] = true;
-								if (step.contains("wait") && !playback.Sleep(step["wait"].get<long>()))
-									throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+								if (step.contains("wait")) {
+									const long waitMs = step["wait"].get<long>();
+									if (!playback.Sleep(waitMs, checkCancelled)) {
+										if (checkCancelled()) {
+											cancelled = true;
+											r["cancelled"] = true;
+											r["ok"] = false;
+											break;
+										}
+										throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+									}
+								}
 							}
 						} else if (step.contains("wait")) {
 							const long ms = step["wait"].get<long>();
 							r["kind"] = "wait";
 							r["ms"] = ms;
-							if (!playback.Sleep(ms))
+							if (!playback.Sleep(ms, checkCancelled)) {
+								if (checkCancelled()) {
+									cancelled = true;
+									r["cancelled"] = true;
+									r["ok"] = false;
+									break;
+								}
 								throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+							}
 							r["ok"] = true;
 						} else if (step.contains("waitFor")) {
 							const WaitForSpec spec = ParseWaitFor(step);
@@ -2770,6 +2732,10 @@ namespace dvb
 							bool       satisfied = false;
 							const auto deadline = steady_clock::now() + milliseconds(timeoutMs);
 							while (steady_clock::now() < deadline) {
+								if (checkCancelled()) {
+									cancelled = true;
+									break;
+								}
 								for (const auto& ev : a_events.Since(since)) {
 									since = ev.seq;
 									if (ev.topic == spec.topic && PayloadMatches(ev.payload, spec.match)) {
@@ -2782,6 +2748,11 @@ namespace dvb
 								if (!acceptBody.empty())
 									AcceptModalIfMatch(acceptBody);
 								std::this_thread::sleep_for(milliseconds(pollMs));
+							}
+							if (cancelled) {
+								r["cancelled"] = true;
+								r["ok"] = false;
+								break;
 							}
 							r["satisfied"] = satisfied;
 							if (!satisfied) {
@@ -2797,12 +2768,21 @@ namespace dvb
 							bool       satisfied = false;
 							const auto deadline = steady_clock::now() + milliseconds(timeoutMs);
 							do {
+								if (checkCancelled()) {
+									cancelled = true;
+									break;
+								}
 								if (CheckState(cond)) {
 									satisfied = true;
 									break;
 								}
 								std::this_thread::sleep_for(milliseconds(pollMs));
 							} while (steady_clock::now() < deadline);
+							if (cancelled) {
+								r["cancelled"] = true;
+								r["ok"] = false;
+								break;
+							}
 							r["satisfied"] = satisfied;
 							if (!satisfied) {
 								r["timedOut"] = true;
@@ -2960,6 +2940,9 @@ namespace dvb
 					if (!markWholeRun && trajectorySpan && i == trajectorySpan->last)
 						replayMark.Release();
 
+					if (cancelled)
+						break;
+
 					if (stepFailed) {
 						anyFailure = true;
 						if (!continueOnError)
@@ -2970,8 +2953,9 @@ namespace dvb
 
 			playback.Finish();
 			json summary{
-				{ "ok", !anyFailure },
+				{ "ok", !anyFailure && !cancelled },
 				{ "aborted", aborted },
+				{ "cancelled", cancelled },
 				{ "stepsRun", results.size() },
 				{ "elapsedMs", duration_cast<milliseconds>(steady_clock::now() - t0).count() },
 				{ "results", std::move(results) },
@@ -3417,11 +3401,12 @@ namespace dvb
 				const std::string formId = text("formId");
 				if (formId.empty())
 					throw ToolError(400, "'formId' (any form) is required for describe");
-				return MainThread::RunAndWait([formId]() -> json {
+				const bool withAnimation = BooleanArgument(a_args, "withAnimation", true);
+				return MainThread::RunAndWait([formId, withAnimation]() -> json {
 					auto* form = LookupFormArg(formId);
 					if (!form)
 						throw ToolError(404, std::format("'{}' is not a loaded form", formId));
-					return FormSearch::DescribeForm(form);
+					return FormSearch::DescribeForm(form, withAnimation);
 				},
 					std::chrono::milliseconds(15000));
 			}
@@ -3640,12 +3625,12 @@ namespace dvb
 		scenario.inputSchema = json{
 			{ "type", "object" },
 			{ "properties", json{
-								{ "action", json{ { "type", "string" }, { "enum", json::array({ "run", "status" }) }, { "description", "run (default, requires 'steps') | status (requires 'runId')" } } },
+								{ "action", json{ { "type", "string" }, { "enum", json::array({ "run", "status", "cancel" }) }, { "description", "run (default, requires 'steps') | status (requires 'runId') | cancel (requires 'runId')" } } },
 								{ "steps", json{ { "type", "array" }, { "description", "run: ordered steps; each is one of tool/wait/waitFor/waitUntil (see description)" }, { "items", json{ { "type", "object" } } } } },
 								{ "repeat", json{ { "type", "integer" }, { "description", "run: run the whole step list N times (default 1, max 1000)" } } },
 								{ "continueOnError", json{ { "type", "boolean" }, { "description", "run: keep going after a failed/timed-out step instead of aborting (default false)" } } },
 								{ "async", json{ { "type", "boolean" }, { "description", "run: return {queued:true, runId} immediately and run in the background (default false); true does not block" } } },
-								{ "runId", json{ { "type", "integer" }, { "description", "status: poll an async run started earlier (from run's 'runId')" } } },
+								{ "runId", json{ { "type", "integer" }, { "description", "status/cancel: async runId from earlier run" } } },
 							} },
 		};
 		a_registry.Register(std::move(scenario),
@@ -3659,14 +3644,28 @@ namespace dvb
 						return *st;
 					throw ToolError(404, std::format("unknown scenario runId {}", runId));
 				}
+				if (action == "cancel") {
+					if (!a_args.contains("runId"))
+						throw ToolError(400, "action='cancel' requires 'runId'");
+					const uint64_t runId = ParseRunId(a_args);
+					const auto     res = RunRegistry::Get().Cancel(runId);
+					if (res == RunRegistry::CancelResult::NotFound)
+						throw ToolError(404, std::format("unknown scenario runId {}", runId));
+					return json{
+						{ "action", "cancel" },
+						{ "runId", runId },
+						{ "cancelled", res == RunRegistry::CancelResult::Cancelled },
+						{ "alreadyDone", res == RunRegistry::CancelResult::AlreadyDone }
+					};
+				}
 				if (action != "run")
-					throw ToolError(400, std::format("unknown action '{}' (run|status)", action));
+					throw ToolError(400, std::format("unknown action '{}' (run|status|cancel)", action));
 				if (!a_args.contains("steps") || !a_args["steps"].is_array())
 					throw ToolError(400, "action='run' requires a 'steps' array");
 
 				// Always server-assigned: a caller-chosen id could collide with a live replay's run.
 				const uint64_t runId = RunRegistry::Get().NextId();
-				json argsWithId = a_args;
+				json           argsWithId = a_args;
 				argsWithId["runId"] = runId;
 				const size_t numSteps = argsWithId["steps"].size();
 
@@ -3681,7 +3680,14 @@ namespace dvb
 						a_events.Publish("scenario.finished", json{ { "runId", runId }, { "ok", false }, { "error", e.what() } });
 						throw;
 					}
-					a_events.Publish("scenario.finished", json{ { "runId", runId }, { "ok", result.value("ok", false) }, { "stepsRun", result.value("stepsRun", 0) } });
+					const bool isCancelled = result.value("cancelled", false);
+					if (isCancelled)
+						a_events.Publish("scenario.cancelled", json{ { "runId", runId }, { "stepsRun", result.value("stepsRun", 0) } });
+					a_events.Publish("scenario.finished", json{
+															  { "runId", runId },
+															  { "ok", result.value("ok", false) },
+															  { "cancelled", isCancelled },
+															  { "stepsRun", result.value("stepsRun", 0) } });
 					return result;
 				};
 
@@ -3973,7 +3979,14 @@ namespace dvb
 						result["timeScaleChanges"] = scaleHold->Changes();
 						logs::info("devbench: replay finished — {} steps, ok={}",
 							result.value("stepsRun", 0), result.value("ok", false));
-						a_events.Publish("replay.finished", json{ { "runId", runId }, { "ok", result.value("ok", false) }, { "stepsRun", result.value("stepsRun", 0) } });
+						const bool isCancelled = result.value("cancelled", false);
+						if (isCancelled)
+							a_events.Publish("replay.cancelled", json{ { "runId", runId }, { "stepsRun", result.value("stepsRun", 0) } });
+						a_events.Publish("replay.finished", json{
+																{ "runId", runId },
+																{ "ok", result.value("ok", false) },
+																{ "cancelled", isCancelled },
+																{ "stepsRun", result.value("stepsRun", 0) } });
 						return result;
 					};
 
@@ -4004,6 +4017,18 @@ namespace dvb
 					if (auto st = RunRegistry::Get().Status(runId))
 						return *st;
 					throw ToolError(404, std::format("unknown replay runId {}", runId));
+				}
+				if (action == "cancel" && a_args.contains("runId")) {
+					const uint64_t runId = ParseRunId(a_args);
+					const auto     res = RunRegistry::Get().Cancel(runId);
+					if (res == RunRegistry::CancelResult::NotFound)
+						throw ToolError(404, std::format("unknown replay runId {}", runId));
+					return json{
+						{ "action", "cancel" },
+						{ "runId", runId },
+						{ "cancelled", res == RunRegistry::CancelResult::Cancelled },
+						{ "alreadyDone", res == RunRegistry::CancelResult::AlreadyDone }
+					};
 				}
 				return Recording::Handle(a_args, a_events);
 			});

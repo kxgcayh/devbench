@@ -183,8 +183,10 @@ TEST_CASE("VR sequence stop authority is token and owner scoped")
 		  VRSequenceStopAccess::kControlTokenMismatch);
 	CHECK(state.AuthorizeStop("other", "secret", false, false) ==
 		  VRSequenceStopAccess::kOwnerMismatch);
-	CHECK(state.AuthorizeStop("owner", "secret", true, false) ==
+	CHECK(state.AuthorizeStop("other", "secret", true, false) ==
 		  VRSequenceStopAccess::kForceRequiresInternal);
+	CHECK(state.AuthorizeStop("owner", "", true, false) ==
+		  VRSequenceStopAccess::kAllowed);
 	CHECK(state.AuthorizeStop("owner", "secret", false, false) ==
 		  VRSequenceStopAccess::kAllowed);
 	CHECK(state.AuthorizeStop("other", "", true, true) ==

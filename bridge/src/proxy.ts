@@ -16,6 +16,7 @@ interface DevbenchToolsResponse {
 }
 
 export class GameUnavailableError extends Error {}
+export class ToolTimeoutError extends Error {}
 
 // A stale/wrong port can accept the connection but never respond; bound how long
 // a call waits before treating it as unreachable rather than hanging indefinitely.
@@ -39,8 +40,14 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch (e) {
+    const err = e as Error;
+    if (err.name === "TimeoutError" || err.name === "AbortError") {
+      throw new ToolTimeoutError(
+        `devbench request timed out after ${FETCH_TIMEOUT_MS / 1000}s at ${url}`,
+      );
+    }
     throw new GameUnavailableError(
-      `devbench not reachable at ${url}: ${(e as Error).message}`,
+      `devbench not reachable at ${url}: ${err.message}`,
     );
   }
   const body: unknown = await res.json().catch(() => undefined);

@@ -989,7 +989,7 @@ namespace dvb::Recording
 
 			{
 				std::lock_guard lock(rec.mtx);
-				const json collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
+				const json      collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
 				rec.activityEvents.assign(collapsedActivity.begin(), collapsedActivity.end());
 			}
 
@@ -1326,13 +1326,14 @@ namespace dvb::Recording
 
 	json BuildReplaySteps(const json& a_args)
 	{
-		std::string path = a_args.value("path", std::string{});
-		if (path.empty()) {
+		const fs::path dir = "Data/SKSE/Plugins/devbench/recordings";
+		std::string    pathStr = a_args.value("path", std::string{});
+		fs::path       resolvedPath;
+		if (pathStr.empty()) {
 			// No path → most recently RECORDED (replay hotkey / quick calls). Rank by the epoch in
 			// the auto-generated recording_<epoch>.json name, not mtime — a copy/deploy/checkout
 			// re-timestamps files, letting a shipped default shadow the user's real last. Unstamped
 			// named files rank oldest (stamp 0); "last" is well-defined only when a stamp exists.
-			const fs::path  dir = "Data/SKSE/Plugins/devbench/recordings";
 			std::error_code ec;
 			fs::path        newest;
 			long long       bestStamp = -1;
@@ -1354,11 +1355,21 @@ namespace dvb::Recording
 			}
 			if (newest.empty())
 				throw ToolError(404, "no 'path' given and no recordings found");
-			path = newest.string();
+			resolvedPath = newest;
+		} else {
+			if (pathStr.find("..") != std::string::npos)
+				throw ToolError(400, "replay 'path' cannot contain '..'");
+			fs::path p(pathStr);
+			if (p.extension() != ".json")
+				throw ToolError(400, "replay 'path' must be a .json file");
+			if (!p.has_parent_path())
+				resolvedPath = dir / p;
+			else
+				resolvedPath = p;
 		}
-		std::ifstream in(path);
+		std::ifstream in(resolvedPath);
 		if (!in)
-			throw ToolError(404, std::format("recording not found: {}", path));
+			throw ToolError(404, std::format("recording not found: {}", resolvedPath.generic_string()));
 		json rec;
 		try {
 			in >> rec;
@@ -1566,7 +1577,7 @@ namespace dvb::Recording
 		// prologue's settle waits above, are NOT part of that clock and must never be added in.
 		const long        txnSettleMs = a_args.value("settleMs", static_cast<long>(g_loadSettleMs));
 		const json        checkpoints = captureCheckpoints ? SortedCheckpoints(meta) : json::array();
-		const std::string recordingStem = fs::path(path).stem().string();
+		const std::string recordingStem = resolvedPath.stem().string();
 		const bool        replayInputs = a_args.value("replayInputs", true);
 		const std::string inputOwner = "recording:" + recordingStem;
 		json              activityPlan;

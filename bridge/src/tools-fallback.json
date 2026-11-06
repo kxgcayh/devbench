@@ -739,8 +739,8 @@
       "inputSchema": {
         "properties": {
           "action": {
-            "description": "run (default, requires 'steps') | status (requires 'runId')",
-            "enum": ["run", "status"],
+            "description": "run (default, requires 'steps') | status (requires 'runId') | cancel (requires 'runId')",
+            "enum": ["run", "status", "cancel"],
             "type": "string"
           },
           "async": {
@@ -756,7 +756,7 @@
             "type": "integer"
           },
           "runId": {
-            "description": "status: poll an async run started earlier (from run's 'runId')",
+            "description": "status/cancel: async runId from earlier run",
             "type": "integer"
           },
           "steps": {

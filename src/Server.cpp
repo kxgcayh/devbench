@@ -236,7 +236,7 @@ namespace dvb
 	{
 		using namespace std::chrono;
 		std::lock_guard lock(g_recCacheMtx);
-		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(1)) {
+		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(5)) {
 			g_recCache = RunTool("recordings", json{ { "action", "list" } });
 			g_recCacheAt = now;
 			g_recCacheValid = true;

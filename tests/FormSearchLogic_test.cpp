@@ -12,6 +12,27 @@ TEST_CASE("a substring match ignores case and an empty needle matches everything
 	CHECK(!ContainsCI("meshes\\hair.nif", "wig"));
 }
 
+TEST_CASE("form type names and aliases normalize to canonical names")
+{
+	CHECK(NormalizeFormTypeName("armo") == "Armor");
+	CHECK(NormalizeFormTypeName("ARMOR") == "Armor");
+	CHECK(NormalizeFormTypeName("arma") == "ArmorAddon");
+	CHECK(NormalizeFormTypeName("armature") == "ArmorAddon");
+	CHECK(NormalizeFormTypeName("armoraddon") == "ArmorAddon");
+	CHECK(NormalizeFormTypeName("hdpt") == "HeadPart");
+	CHECK(NormalizeFormTypeName("head") == "HeadPart");
+	CHECK(NormalizeFormTypeName("headpart") == "HeadPart");
+	CHECK(NormalizeFormTypeName("idle") == "Idle");
+	CHECK(NormalizeFormTypeName("actor") == "NPC");
+	CHECK(NormalizeFormTypeName("achr") == "NPC");
+	CHECK(NormalizeFormTypeName("npc_") == "NPC");
+	CHECK(NormalizeFormTypeName("npc") == "NPC");
+	CHECK(NormalizeFormTypeName("weap") == "Weapon");
+	CHECK(NormalizeFormTypeName("weapon") == "Weapon");
+	CHECK(NormalizeFormTypeName("misc") == "Misc");
+	CHECK(NormalizeFormTypeName("unknown") == "unknown");
+}
+
 TEST_CASE("head part types parse from their names in any case")
 {
 	CHECK(ParseHeadPartType("Hair") == 3);

@@ -4,6 +4,7 @@
 #include "ReplayTrajectory.h"
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -39,8 +40,8 @@ namespace dvb::Recording::ReplayDriver
 
 		// Sleeps a_ms of GAME time, so a scenario's waits scale with the run just as the driven
 		// trajectory does. Returns false if the wall-clock backstop expired first (the main
-		// thread stalled) rather than the game-time deadline being reached.
-		bool Sleep(long a_ms);
+		// thread stalled) rather than the game-time deadline being reached, or if cancellation fired.
+		bool Sleep(long a_ms, const std::function<bool()>& a_isCancelled = nullptr);
 
 		// Waits for the final pose, records the stats and stops the driver. Safe to call repeatedly.
 		void Finish();

@@ -17,6 +17,9 @@ namespace dvb::FormSearchLogic
 	/// Case-insensitive equality.
 	bool EqualsCI(std::string_view a_left, std::string_view a_right);
 
+	/// Normalize a form type name or alias (e.g. "armo" -> "Armor", "actor" -> "NPC", "arma" -> "ArmorAddon").
+	std::string_view NormalizeFormTypeName(std::string_view a_input);
+
 	/// The head part type names, in engine order: Misc (0), Face, Eyes, Hair, FacialHair, Scar, Eyebrows.
 	std::string_view HeadPartTypeName(int a_type);
 
