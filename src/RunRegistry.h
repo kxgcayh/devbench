@@ -105,6 +105,22 @@ namespace dvb
 			return out;
 		}
 
+		/// Every retained run, oldest first, without transcripts.
+		json List()
+		{
+			std::lock_guard lock(m_mtx);
+			json            out = json::array();
+			for (const auto& [id, st] : m_runs) {
+				json entry{ { "runId", id }, { "done", st.done } };
+				if (st.done)
+					entry["ok"] = st.ok;
+				if (st.cancelled)
+					entry["cancelled"] = true;
+				out.push_back(std::move(entry));
+			}
+			return out;
+		}
+
 		void ClearForTesting()
 		{
 			std::lock_guard lock(m_mtx);

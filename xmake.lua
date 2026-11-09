@@ -15,7 +15,7 @@ includes("xmake/cpp-mcp.lua")
 set_project("devbench")
 set_license("GPL-3.0")
 
-local version = "1.32.0"
+local version = "1.35.0"
 local ver = version:split("%.")
 set_version(version)
 
@@ -200,6 +200,7 @@ add_packages("nlohmann_json", "stb")
 add_includedirs("src")
 add_files("tests/*.cpp")
 add_files("src/ToolRegistry.cpp") -- exercised directly; pure logic, no game deps
+add_files("src/Notices.cpp") -- notice board; pure logic
 add_files("src/Ssim.cpp") -- exercised directly; pure logic, no game deps
 add_files("src/KeyboardInputState.cpp") -- key resolution + lease ownership; pure logic
 add_files("src/VRInputState.cpp") -- atomic tracked-set validation/encoding; pure logic
@@ -222,6 +223,7 @@ add_files("src/InspectLogic.cpp") -- lights scope/budget/ordering and the handsR
 add_files("src/ReplayTrajectory.cpp") -- pose keyframe sampling/interpolation; pure logic
 add_files("src/RecordingActivity.cpp") -- activity contract + input/trajectory interleave; pure logic
 add_files("src/DrawStatsLogic.cpp")
+add_files("src/RunStatusLogic.cpp") -- run-status transcript compaction; pure logic
 add_headerfiles("tests/*.h")
 set_pcxxheader("tests/pch.h")
 add_defines("_WINSOCKAPI_")

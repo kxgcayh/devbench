@@ -51,20 +51,25 @@ namespace dvb::MainThread
 		auto       invocation = std::make_shared<QueuedTask>(std::move(a_fn), deadline);
 		auto       future = invocation->GetFuture();
 
-		g_pendingTasks.fetch_add(1, std::memory_order_relaxed);
-		auto run = [invocation]() {
+		const bool countsTowardHealth = a_queue == Queue::kMain;
+		if (countsTowardHealth)
+			g_pendingTasks.fetch_add(1, std::memory_order_relaxed);
+		auto run = [invocation, countsTowardHealth]() {
 			g_mainThreadId.store(std::this_thread::get_id(), std::memory_order_relaxed);
 			// Stamp completion + drop the pending count on the main thread whether fn()
 			// returns or throws — a routine ToolError must not leave the markers looking
 			// like a stalled queue.
 			struct Finally
 			{
+				bool countsTowardHealth;
 				~Finally()
 				{
+					if (!countsTowardHealth)
+						return;
 					g_lastTaskFrame.store(game::CurrentFrame(), std::memory_order_relaxed);
 					g_pendingTasks.fetch_sub(1, std::memory_order_relaxed);
 				}
-			} finally;
+			} finally{ countsTowardHealth };
 			invocation->Run();
 		};
 		if (a_queue == Queue::kUi)
@@ -104,7 +109,7 @@ namespace dvb::MainThread
 				throw TaskTimeout(false, std::format("main-thread task did not start within {}ms; queued task abandoned", a_timeout.count()));
 			if (frameNow == frameAtStart)
 				throw TaskTimeout(false, std::format(
-											 "main-thread task did not start within {}ms; queued task abandoned and the game frame counter has not advanced -- main thread hung or the game is fully paused; if no pause menu is open, only a process restart recovers",
+											 "main-thread task did not start within {}ms; queued task abandoned and the game frame counter has not advanced -- the game is paused, loading or hung; check blockedBy (or menu action=list) and retry once it clears, and only if nothing is open and it persists does a process restart recover",
 											 a_timeout.count()));
 			throw TaskTimeout(false, std::format(
 										 "main-thread task did not start within {}ms; queued task abandoned ({} frames elapsed -- main thread busy)",

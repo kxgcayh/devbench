@@ -16,7 +16,7 @@ namespace dvb::MainThread
 			ToolError(504, a_message, json{ { "kind", "main_thread_timeout" }, { "taskStarted", a_started }, { "abandoned", !a_started }, { "outcome", a_started ? "unknown" : "not_started" } }), started(a_started) {}
 	};
 
-	/// Which SKSE queue runs a task. Scaleform work belongs on kUi.
+	/// Which SKSE queue runs a task. Scaleform work belongs on kUi; only kMain tasks count toward PendingTasks and LastCompletedFrame.
 	enum class Queue
 	{
 		kMain,
