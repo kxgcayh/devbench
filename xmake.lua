@@ -131,6 +131,41 @@ add_configfiles("src/Version.h.in")
 set_configdir("$(builddir)/.gens/devbench/$(plat)/$(arch)/$(mode)")
 add_includedirs("$(builddir)/.gens/devbench/$(plat)/$(arch)/$(mode)")
 
+-- Refresh build provenance before compilation; do not bake the configure-time HEAD into a DLL.
+on_load(function(target)
+    target:add("includedirs", path.join(target:autogendir(), "build-info"))
+end)
+before_build(function(target)
+    local commit, dirty = "", -1
+    local function git(args)
+        local output
+        try {
+            function() output = os.iorunv("git", args) end,
+            catch { function() end },
+        }
+        return output
+    end
+    local root = git({ "rev-parse", "--show-toplevel" })
+    if root and path.translate(root:trim()) == path.translate(os.projectdir()) then
+        local revision = git({ "rev-parse", "--verify", "HEAD" })
+        if revision and revision:trim():match("^[0-9a-f]+$") then
+            commit = revision:trim()
+        end
+        local changes = git({
+            "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none",
+        })
+        if changes then
+            dirty = changes:trim() == "" and 0 or 1
+        end
+    end
+    local header = path.join(target:autogendir(), "build-info", "BuildInfo.h")
+    local content = '#pragma once\n\n#define DEVBENCH_GIT_COMMIT "' .. commit .. '"\n#define DEVBENCH_GIT_DIRTY ' .. dirty .. '\n'
+    if not os.isfile(header) or io.readfile(header) ~= content then
+        os.mkdir(path.directory(header))
+        io.writefile(header, content)
+    end
+end)
+
 -- auto deploy: set SkyrimPluginTargets to one or more game Data paths separated by ';'
 after_build(function(target)
     local deploy_dirs = os.getenv("SkyrimPluginTargets")

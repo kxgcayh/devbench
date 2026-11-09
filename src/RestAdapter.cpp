@@ -76,7 +76,7 @@ namespace dvb
 			for (const auto& d : m_registry.List())
 				arr.push_back(json{ { "name", d.name }, { "description", d.description },
 					{ "inputSchema", d.inputSchema }, { "readOnly", d.readOnly } });
-			WriteJson(res, 200, json{ { "tools", std::move(arr) }, { "mcp_bridge", BridgeDiscoveryInfo() } });
+			WriteJson(res, 200, json{ { "tools", std::move(arr) }, { "mcp_bridge", BridgeDiscoveryInfo() }, { "identity", InstanceIdentity() } });
 		});
 
 		// Invoke: POST /api/tool/<name>, body is the arguments object.
@@ -95,7 +95,7 @@ namespace dvb
 			if (r.ok)
 				WriteJson(res, 200, r.value);
 			else
-				WriteJson(res, r.errorCode ? r.errorCode : 500, json{ { "error", r.errorMessage }, { "code", r.errorCode } });
+				WriteJson(res, r.errorCode ? r.errorCode : 500, r.ErrorBody());
 		});
 
 		// Deliberately GET, not POST (a bodyless POST stalls on httplib's read timeout; see

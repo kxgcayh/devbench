@@ -249,6 +249,59 @@ spots a multi-instance misattach in one call (`frame < 0` = counter unresolved /
 MCP clients (which speak `tools/call`, not REST GET) get the same off-thread signal via
 `inspect kind=health` — no new tool, just another `inspect` kind.
 
+### Build and process identity
+
+`GET /api/health`, `inspect kind=health` and `inspect kind=state` add `instanceId`,
+`runtime: {name, version}` and `build: {version, gitCommit, dirty}` alongside the existing
+identity fields. `GET /api/tools` includes the same object under `identity`. Runtime names
+are `se`, `ae` or `vr`; runtime versions use dotted notation.
+
+`instanceId` combines the Windows PID with process creation time, so a reused PID does not
+identify an earlier game process. It stays constant across save loads and server restarts
+within the same process; the bound `port` remains live. If process creation time cannot be
+read, `instanceId` is null and clients must not use it as a cache key. Clients may cache
+runtime/build data for that instance; recheck discovery after a restart. Tool registrations
+can change within an instance: invalidate cached schemas on `notifications/tools/list_changed`
+(or re-fetch `/api/tools` for REST clients).
+
+Both build systems refresh Git provenance before compilation. Dirty includes tracked edits,
+untracked source and modified submodules; ignored build output is excluded. Source archives
+without their own Git repository report null `gitCommit` and `dirty`, rather than inheriting
+a containing repository's identity. A dirty build's commit identifies its base revision,
+not the exact uncommitted source bytes.
+
+### Main-thread timeout outcomes
+
+HTTP 504 retains its existing `error` and `code` fields and adds `details` for
+`MainThread::RunAndWait` timeouts:
+
+```json
+{"error":"...","code":504,"details":{"kind":"main_thread_timeout","taskStarted":false,"abandoned":true,"outcome":"not_started"}}
+```
+
+`taskStarted:false` means that queued callback was abandoned and will not execute later.
+`taskStarted:true`, `abandoned:false`, `outcome:"unknown"` means it began and may finish after
+the response. Never automatically retry a mutation with an unknown outcome. These fields
+refer to the timed-out callback, not earlier work in a compound tool invocation.
+
+The direct MCP adapter retains `isError:true` and its `[504] message` text, followed by a
+newline and the same JSON error body. The stdio bridge retains `ok:false` and `reason` in
+its JSON text block and adds `error`, `code` and `details`. Ordinary errors and successful
+responses keep their existing shapes. Other timeout paths, including Papyrus VM completion
+and client network timeouts, do not imply that a main-thread callback was abandoned; absence
+of `details` must not be interpreted as safe to retry.
+
+Offline regression checks:
+
+```bash
+python tests/test_build_info.py
+# After TypeScript compilation in bridge/:
+node --test bridge/test/timeout-details.test.mjs
+```
+
+The identity and timeout additions have been cross-built and tested without Skyrim. Live
+SE/AE and VR verification is pending.
+
 ## Built-in tools
 
 All tools are reachable over both MCP (`tools/call`) and REST (`POST /api/tool/<name>`).

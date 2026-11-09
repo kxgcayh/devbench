@@ -38,8 +38,8 @@ namespace dvb
 				// Throwing lets cpp-mcp build the canonical error result (isError:true +
 				// text content array); returning an {isError,...} object here would land
 				// inside "content" as a non-array and break the same validation. cpp-mcp
-				// only surfaces what(), so fold the status code into the message.
-				throw std::runtime_error("[" + std::to_string(r.errorCode) + "] " + r.errorMessage);
+				// only surfaces what(); preserve the status prefix and append JSON details when present.
+				throw std::runtime_error(r.ErrorText());
 			});
 
 			// A tool was added or replaced (e.g. a mod registered an inspect kind / menu, which also

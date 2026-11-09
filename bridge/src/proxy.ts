@@ -17,6 +17,14 @@ interface DevbenchToolsResponse {
 
 export class GameUnavailableError extends Error {}
 export class ToolTimeoutError extends Error {}
+export class ToolResponseError extends Error {
+  constructor(
+    message: string,
+    readonly body: Record<string, unknown>,
+  ) {
+    super(message);
+  }
+}
 
 // A stale/wrong port can accept the connection but never respond; bound how long
 // a call waits before treating it as unreachable rather than hanging indefinitely.
@@ -54,7 +62,13 @@ async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   if (!res.ok) {
     const message =
       (body as { error?: string } | undefined)?.error ?? res.statusText;
-    throw new Error(`devbench returned ${res.status}: ${message}`);
+    const failure = body as Record<string, unknown> | undefined;
+    throw new ToolResponseError(
+      `devbench returned ${res.status}: ${message}`,
+      failure && typeof failure === "object" && !Array.isArray(failure)
+        ? failure
+        : { error: message, code: res.status },
+    );
   }
   return body;
 }

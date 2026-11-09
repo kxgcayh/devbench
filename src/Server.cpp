@@ -1,5 +1,6 @@
 #include "Server.h"
 
+#include "BuildInfo.h"
 #include "LoopbackGuard.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
@@ -229,7 +230,7 @@ namespace dvb
 		ToolContext ctx{ "ui" };
 		ctx.internal = true;  // menu-driven; don't log each call
 		const ToolResult r = registry->Invoke(a_name, a_args, ctx);
-		return r.ok ? r.value : json{ { "error", r.errorMessage }, { "code", r.errorCode } };
+		return r.ok ? r.value : r.ErrorBody();
 	}
 
 	json ListRecordingsCached()
@@ -282,13 +283,28 @@ namespace dvb
 
 	json InstanceIdentity()
 	{
-		// pid/exe/vr are constant for the process lifetime — compute once. /api/health is
-		// polled frequently, so avoid a GetModuleFileNameA + path + string alloc per call;
-		// only the bound port (an atomic) is read live.
-		static const int         pid = static_cast<int>(::GetCurrentProcessId());
-		static const std::string exe = ExecutableName();
-		static const bool        vr = REL::Module::IsVR();
-		return json{ { "pid", pid }, { "port", BoundPort() }, { "exe", exe }, { "vr", vr } };
+		static const json identity = []() {
+			const auto pid = ::GetCurrentProcessId();
+			FILETIME   creation{}, exit{}, kernel{}, user{};
+			json       instanceId = nullptr;
+			if (::GetProcessTimes(::GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
+				const auto ticks = (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+				instanceId = std::format("{}-{:016x}", pid, ticks);
+			}
+			const bool  vr = REL::Module::IsVR();
+			const char* runtime = vr ? "vr" : (REL::Module::IsAE() ? "ae" : "se");
+			return json{
+				{ "pid", pid }, { "exe", ExecutableName() }, { "vr", vr },
+				{ "instanceId", instanceId },
+				{ "runtime", { { "name", runtime }, { "version", REL::Module::get().version().string(".") } } },
+				{ "build", { { "version", DEVBENCH_VERSION_STRING },
+							   { "gitCommit", std::string(DEVBENCH_GIT_COMMIT).empty() ? json(nullptr) : json(DEVBENCH_GIT_COMMIT) },
+							   { "dirty", DEVBENCH_GIT_DIRTY < 0 ? json(nullptr) : json(DEVBENCH_GIT_DIRTY != 0) } } }
+			};
+		}();
+		auto result = identity;
+		result["port"] = BoundPort();
+		return result;
 	}
 
 	json BridgeDiscoveryInfo()

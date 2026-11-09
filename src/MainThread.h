@@ -13,7 +13,7 @@ namespace dvb::MainThread
 	{
 		bool started;
 		TaskTimeout(bool a_started, const std::string& a_message) :
-			ToolError(504, a_message), started(a_started) {}
+			ToolError(504, a_message, json{ { "kind", "main_thread_timeout" }, { "taskStarted", a_started }, { "abandoned", !a_started }, { "outcome", a_started ? "unknown" : "not_started" } }), started(a_started) {}
 	};
 
 	/// Which SKSE queue runs a task. Scaleform work belongs on kUi.

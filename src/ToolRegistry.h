@@ -29,9 +29,10 @@ namespace dvb
 	/// status the REST adapter returns verbatim and the MCP adapter maps to an error.
 	struct ToolError : std::runtime_error
 	{
-		int code;  ///< 400 bad args, 404 not found, 409 conflict, 422 unprocessable, 500 internal
-		ToolError(int a_code, const std::string& a_msg) :
-			std::runtime_error(a_msg), code(a_code) {}
+		json details = json::object();
+		int  code;  ///< 400 bad args, 404 not found, 409 conflict, 422 unprocessable, 500 internal
+		ToolError(int a_code, const std::string& a_msg, json a_details = json::object()) :
+			std::runtime_error(a_msg), details(std::move(a_details)), code(a_code) {}
 	};
 
 	/// A handler: JSON arguments in, JSON result out. Invoked on the server's listener
@@ -63,11 +64,28 @@ namespace dvb
 		json        value;  ///< result payload when ok
 		int         errorCode = 0;
 		std::string errorMessage;
+		json        errorDetails = json::object();
+
+		json ErrorBody() const
+		{
+			json body{ { "error", errorMessage }, { "code", errorCode } };
+			if (!errorDetails.empty())
+				body["details"] = errorDetails;
+			return body;
+		}
+
+		std::string ErrorText() const
+		{
+			std::string text = "[" + std::to_string(errorCode) + "] " + errorMessage;
+			if (!errorDetails.empty())
+				text += "\n" + ErrorBody().dump(-1, ' ', false, json::error_handler_t::replace);
+			return text;
+		}
 
 		static ToolResult Success(json a_value) { return { true, std::move(a_value), 0, {} }; }
-		static ToolResult Failure(int a_code, std::string a_msg)
+		static ToolResult Failure(int a_code, std::string a_msg, json a_details = json::object())
 		{
-			return { false, json::object(), a_code, std::move(a_msg) };
+			return { false, json::object(), a_code, std::move(a_msg), std::move(a_details) };
 		}
 	};
 
