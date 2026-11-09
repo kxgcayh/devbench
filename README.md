@@ -40,6 +40,55 @@ shared registry every mod can extend.
   registers into the **same** server, one agent session can orchestrate across your whole load
   order. [Open Shaders](https://github.com/alandtse/open-shaders) does this today.
 
+## Dialogue topics
+
+The `dialogue` tool reads the active conversation and selects topics through the active
+menu's normal `onItemSelect` handler. It applies to dialogue topics generally, including
+mod-added topics; it has no dependency on a particular quest, NPC, or dialogue mod.
+It does not invoke `TopicClicked` directly, replace scripts, alter topic conditions,
+mark lines heard, or force progress past a voice or menu delay.
+
+Send `POST /api/tool/dialogue` with `{"action":"inspect"}` (or `{}`). The response includes:
+
+- `open`, `supported`, `ready`: whether the menu exists, exposes the expected interface,
+  and currently accepts topic selection. A closed menu returns all three as false.
+- `speaker`, `subtitle`: displayed text; the speaker is a name, not an actor FormID.
+- `menuState`, `state`: raw state and its vanilla meaning (`greeting`, `topics`,
+  `topicClicked`, `transitioning`, or `unknown`).
+- `allowProgress`, `fadedIn`, `listVisible`, `inputDisabled`, `selectionDisabled`, `selectedIndex`:
+  observed UI values. Unavailable scalar values are null.
+- `topics`: the complete list, with `{index,text,topicIndex,topicIsNew}` per entry.
+  `index` is the zero-based list position; `topicIndex` is the menu's engine callback
+  index, not a DIAL/INFO FormID. `topicIsNew` is raw UI data, not a guarantee of displayed
+  colour or persistent heard state.
+- `snapshot`: an observed-content fingerprint of the speaker name and topic list.
+  It detects changed text, ordering and topic indexes; it does not identify a unique
+  conversation session or distinguish identically named actors with identical topics.
+
+To choose a topic, inspect immediately beforehand, check `ready`, then send
+`{"action":"select","index":0,"snapshot":"<snapshot from inspect>"}`.
+Snapshot validation, readiness checks and submission run in one UI task. The tool
+verifies the selected entry before calling the menu handler. A successful response
+returns `submitted:true`, `completed:false` and the chosen `topic`. This confirms handler
+invocation; it does not confirm that a mod accepted the click or that a response,
+quest fragment or transaction completed. Inspect again and verify the relevant game
+state to establish completion. Do not automatically retry a timed-out selection.
+
+Selection returns 400 for malformed arguments or an out-of-range index, 409 for a
+closed/busy menu or changed snapshot, and 422 for an unsupported menu interface or
+failed invocation. A failed invocation can leave the UI highlight changed. Inspection
+of an unsupported layout returns `supported:false` and a `reason`; no selection is
+attempted. Lists above 512 entries are unsupported rather than silently truncated.
+
+Compatibility is based on the vanilla `DialogueMenu_mc` interface, also checked against
+Untarnished UI's ActionScript. Custom replacements that retain those fields and methods
+can use the same path; arbitrary replacement interfaces are not assumed compatible.
+No SWF is installed or modified. This candidate builds for SE/AE/VR, but the new tool has
+not yet been exercised in a running game on any runtime; VR behaviour is unverified.
+Host tests cover selection validation, freshness and readiness. HTTP tests inspect the
+current conversation without starting one. Actual selection is opt-in through
+`DEVBENCH_TEST_DIALOGUE_SELECT_INDEX`, because choosing a topic changes gameplay.
+
 ## Design
 
 ```

@@ -9,6 +9,7 @@
 #include "AssetInfo.h"
 #include "Capture.h"
 #include "ConsoleLogCapture.h"
+#include "Dialogue.h"
 #include "DifficultyLogic.h"
 #include "DrawStats.h"
 #include "DrawStatsLogic.h"
@@ -3538,6 +3539,7 @@ namespace dvb
 		a_registry.Register(BuildMenuDescriptor(), &MenuHandler);
 		a_registry.Register(Capture::BuildCaptureDescriptor(), &Capture::Handle);
 		a_registry.Register(Gfx::BuildDescriptor(), &Gfx::Handle);
+		a_registry.Register(Dialogue::BuildDescriptor(), &Dialogue::Handle);
 
 		// When a mod registers a kind/menu/provider, rebuild that base tool's descriptor so the new
 		// key is discoverable on the first call (the registry's registration path re-registers it

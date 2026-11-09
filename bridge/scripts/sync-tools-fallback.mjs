@@ -25,6 +25,7 @@ const CORE_TOOL_NAMES = new Set([
   "actor",
   "forms",
   "gfx",
+  "dialogue",
   "camera",
   "papyrus",
   "capture",

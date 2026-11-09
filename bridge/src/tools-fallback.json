@@ -941,6 +941,29 @@
         "type": "object"
       },
       "readOnly": true
+    },
+    {
+      "description": "Inspect the active conversation or select a dialogue topic through the active SWF's normal input handler. inspect (default) returns open, supported, ready, speaker, subtitle, menuState/state, progress flags, selectedIndex, topics [{index,text,topicIndex,topicIsNew}] and snapshot. select requires a zero-based list index and the snapshot from inspect; changed speaker/topics and busy menus are refused. A snapshot checks observed content, not session identity. submitted means the UI handler was invoked, not that the response or gameplay completed; inspect again to observe progress. Supports vanilla-compatible DialogueMenu_mc interfaces; custom layouts report supported=false. topicIsNew is raw UI data, not a guarantee of displayed colour or persistent heard state. No mod-specific callbacks are bypassed.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": ["inspect", "select"],
+            "type": "string"
+          },
+          "index": {
+            "description": "select: zero-based index from topics, not engine topicIndex",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "snapshot": {
+            "description": "select: snapshot returned by dialogue inspect",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "dialogue"
     }
   ]
 }
