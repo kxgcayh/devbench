@@ -221,7 +221,8 @@ namespace dvb::FormSearch
 
 	json Find(const Query& a_query)
 	{
-		const auto* entry = std::ranges::find_if(kTypes, [&](const TypeEntry& e) { return FormSearchLogic::EqualsCI(e.name, a_query.formType); });
+		const auto  normalizedType = FormSearchLogic::NormalizeFormTypeName(a_query.formType);
+		const auto* entry = std::ranges::find_if(kTypes, [&](const TypeEntry& e) { return FormSearchLogic::EqualsCI(e.name, normalizedType); });
 		if (entry == std::end(kTypes))
 			throw ToolError(400, std::format("unsupported formType '{}' (use {})", a_query.formType, SupportedTypes()));
 		const bool isArmorLike = entry->type == RE::FormType::Armor || entry->type == RE::FormType::Armature;
@@ -263,9 +264,9 @@ namespace dvb::FormSearch
 		};
 	}
 
-	json DescribeForm(RE::TESForm* a_form)
+	json DescribeForm(RE::TESForm* a_form, bool a_withAnimation)
 	{
-		json out = a_form->As<RE::TESIdleForm>() ? DescribeIdle(a_form->As<RE::TESIdleForm>(), true) : Describe(a_form);
+		json out = a_form->As<RE::TESIdleForm>() ? DescribeIdle(a_form->As<RE::TESIdleForm>(), a_withAnimation) : Describe(a_form);
 		out["pluginInfo"] = AssetInfo::Plugin(PluginOf(a_form));
 		return out;
 	}

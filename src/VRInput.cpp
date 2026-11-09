@@ -913,8 +913,11 @@ namespace dvb
 			if (action == "stop" || action == "releaseAll") {
 				if (a_args.contains("controlToken") && !a_args["controlToken"].is_string())
 					throw ToolError(400, "'controlToken' must be a string");
+				const bool force = BooleanArgument(a_args, "all", false) ||
+				                   BooleanArgument(a_args, "force", false) ||
+				                   action == "releaseAll";
 				return VRTrackedSetManager::Get().Stop(owner,
-					a_args.value("controlToken", std::string{}), BooleanArgument(a_args, "all", false),
+					a_args.value("controlToken", std::string{}), force,
 					a_ctx.internal,
 					action == "releaseAll" ? "releaseAll" : "request");
 			}

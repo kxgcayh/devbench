@@ -24,7 +24,7 @@ namespace dvb::AssetInfo
 		constexpr std::size_t kMaxHeaderBytes = 4u << 20;
 		constexpr std::size_t kMaxFileBytes = 32u << 20;
 		constexpr std::size_t kReadChunk = 64u << 10;
-		constexpr std::size_t kMaxBehaviorsSearched = 64;
+		constexpr std::size_t kMaxBehaviorsSearched = 16;
 
 		struct Behavior
 		{

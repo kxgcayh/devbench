@@ -36,7 +36,7 @@ namespace dvb::FormSearch
 	/// Main thread. One form, described as Find describes it, with its plugin's header under pluginInfo (author, description,
 	/// masters). An Idle also carries its animation (the clip its event plays, with
 	/// its length) under animation; see AssetInfo::IdleAnimation.
-	json DescribeForm(RE::TESForm* a_form);
+	json DescribeForm(RE::TESForm* a_form, bool a_withAnimation = true);
 
 	/// Main thread. The head parts on the actor's base record, each described as Find describes a HeadPart.
 	json HeadPartsOf(RE::Actor* a_actor);

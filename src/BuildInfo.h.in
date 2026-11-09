@@ -1,0 +1,4 @@
+#pragma once
+
+#define DEVBENCH_GIT_COMMIT "@commit@"
+#define DEVBENCH_GIT_DIRTY @dirty@

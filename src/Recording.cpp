@@ -772,6 +772,27 @@ namespace dvb::Recording
 			return s;
 		}
 
+		// Temp file + rename, so a crash or full disk can't leave a truncated recording.
+		void WriteFileAtomic(const fs::path& a_path, const std::string& a_contents)
+		{
+			std::error_code ec;
+			const fs::path  temporary = a_path.string() + ".tmp";
+			{
+				std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+				if (!out)
+					throw std::runtime_error(std::format("could not open temporary recording file: {}", temporary.string()));
+				out.write(a_contents.data(), static_cast<std::streamsize>(a_contents.size()));
+				out.flush();
+				if (!out)
+					throw std::runtime_error(std::format("could not flush temporary recording file: {}", temporary.string()));
+			}
+			fs::rename(temporary, a_path, ec);
+			if (ec)
+				throw std::runtime_error(std::format("could not publish recording file: {}", ec.message()));
+			if (!fs::exists(a_path, ec) || ec || fs::file_size(a_path, ec) != a_contents.size() || ec)
+				throw std::runtime_error("recording file verification failed after publication");
+		}
+
 		fs::path WriteScenarioFile(const json& a_scenario)
 		{
 			const fs::path  dir = "Data/SKSE/Plugins/devbench/recordings";
@@ -779,24 +800,9 @@ namespace dvb::Recording
 			fs::create_directories(dir, ec);
 			if (ec)
 				throw std::runtime_error(std::format("could not create recording directory: {}", ec.message()));
-			const auto        stamp = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-			const fs::path    path = dir / std::format("recording_{}.json", stamp);
-			const fs::path    temporary = path.string() + ".tmp";
-			const std::string serialized = SerializeRecording(a_scenario);
-			{
-				std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-				if (!out)
-					throw std::runtime_error(std::format("could not open temporary recording file: {}", temporary.string()));
-				out.write(serialized.data(), static_cast<std::streamsize>(serialized.size()));
-				out.flush();
-				if (!out)
-					throw std::runtime_error(std::format("could not flush temporary recording file: {}", temporary.string()));
-			}
-			fs::rename(temporary, path, ec);
-			if (ec)
-				throw std::runtime_error(std::format("could not publish recording file: {}", ec.message()));
-			if (!fs::exists(path, ec) || ec || fs::file_size(path, ec) != serialized.size() || ec)
-				throw std::runtime_error("recording file verification failed after publication");
+			const auto     stamp = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+			const fs::path path = dir / std::format("recording_{}.json", stamp);
+			WriteFileAtomic(path, SerializeRecording(a_scenario));
 			return path;
 		}
 	}
@@ -972,7 +978,7 @@ namespace dvb::Recording
 		if (action == "stop") {
 			{
 				std::lock_guard lock(rec.mtx);
-				if (rec.state != RecorderState::running)
+				if (rec.state != RecorderState::running && rec.state != RecorderState::stopping)
 					return json{ { "error", "not recording" }, { "state", RecorderStateName(rec.state) } };
 				rec.state = RecorderState::stopping;
 				rec.running.store(false, std::memory_order_relaxed);
@@ -981,8 +987,11 @@ namespace dvb::Recording
 			if (rec.worker.joinable())
 				rec.worker.join();  // sampler done → samples are stable, no lock needed below
 
-			const json collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
-			rec.activityEvents.assign(collapsedActivity.begin(), collapsedActivity.end());
+			{
+				std::lock_guard lock(rec.mtx);
+				const json      collapsedActivity = CollapseConsoleTyping(json(rec.activityEvents));
+				rec.activityEvents.assign(collapsedActivity.begin(), collapsedActivity.end());
+			}
 
 			const long recordedMs = static_cast<long>(
 				duration_cast<milliseconds>(steady_clock::now() - rec.startTick).count());
@@ -992,9 +1001,8 @@ namespace dvb::Recording
 				scenario = BuildScenario(rec, recordedMs);
 				path = WriteScenarioFile(scenario);
 			} catch (const std::exception& e) {
-				std::lock_guard lock(rec.mtx);
-				rec.state = RecorderState::idle;
-				throw ToolError(500, std::format("recording stopped but could not be persisted: {}", e.what()));
+				// Keep rec.state as stopping so samples are not lost; caller can retry 'record stop'
+				throw ToolError(500, std::format("recording stopped but could not be persisted: {}. Retry 'record stop' to save.", e.what()));
 			}
 
 			// generic_string(), not string(): a bare `dir / filename` join uses the native
@@ -1318,13 +1326,14 @@ namespace dvb::Recording
 
 	json BuildReplaySteps(const json& a_args)
 	{
-		std::string path = a_args.value("path", std::string{});
-		if (path.empty()) {
+		const fs::path dir = "Data/SKSE/Plugins/devbench/recordings";
+		std::string    pathStr = a_args.value("path", std::string{});
+		fs::path       resolvedPath;
+		if (pathStr.empty()) {
 			// No path → most recently RECORDED (replay hotkey / quick calls). Rank by the epoch in
 			// the auto-generated recording_<epoch>.json name, not mtime — a copy/deploy/checkout
 			// re-timestamps files, letting a shipped default shadow the user's real last. Unstamped
 			// named files rank oldest (stamp 0); "last" is well-defined only when a stamp exists.
-			const fs::path  dir = "Data/SKSE/Plugins/devbench/recordings";
 			std::error_code ec;
 			fs::path        newest;
 			long long       bestStamp = -1;
@@ -1346,11 +1355,21 @@ namespace dvb::Recording
 			}
 			if (newest.empty())
 				throw ToolError(404, "no 'path' given and no recordings found");
-			path = newest.string();
+			resolvedPath = newest;
+		} else {
+			if (pathStr.find("..") != std::string::npos)
+				throw ToolError(400, "replay 'path' cannot contain '..'");
+			fs::path p(pathStr);
+			if (p.extension() != ".json")
+				throw ToolError(400, "replay 'path' must be a .json file");
+			if (!p.has_parent_path())
+				resolvedPath = dir / p;
+			else
+				resolvedPath = p;
 		}
-		std::ifstream in(path);
+		std::ifstream in(resolvedPath);
 		if (!in)
-			throw ToolError(404, std::format("recording not found: {}", path));
+			throw ToolError(404, std::format("recording not found: {}", resolvedPath.generic_string()));
 		json rec;
 		try {
 			in >> rec;
@@ -1558,7 +1577,7 @@ namespace dvb::Recording
 		// prologue's settle waits above, are NOT part of that clock and must never be added in.
 		const long        txnSettleMs = a_args.value("settleMs", static_cast<long>(g_loadSettleMs));
 		const json        checkpoints = captureCheckpoints ? SortedCheckpoints(meta) : json::array();
-		const std::string recordingStem = fs::path(path).stem().string();
+		const std::string recordingStem = resolvedPath.stem().string();
 		const bool        replayInputs = a_args.value("replayInputs", true);
 		const std::string inputOwner = "recording:" + recordingStem;
 		json              activityPlan;
@@ -1582,6 +1601,8 @@ namespace dvb::Recording
 		if (!vrPlan.value("step", json(nullptr)).is_null())
 			steps.push_back(vrPlan["step"]);
 		for (const auto& s : trajectory) {
+			if (s.contains("atMs") && s["atMs"].is_number())
+				cumMs = std::max(cumMs, s["atMs"].get<long>());
 			steps.push_back(s);
 			if (s.contains("wait"))
 				cumMs += s["wait"].get<long>();
@@ -1708,10 +1729,11 @@ namespace dvb::Recording
 			const bool     value = a_args.value("value", true);
 			json           rec = load(p);
 			rec["meta"]["validated"] = value;
-			std::ofstream out(p, std::ios::trunc);
-			if (!out)
-				throw ToolError(500, "could not write recording");
-			out << SerializeRecording(rec);
+			try {
+				WriteFileAtomic(p, SerializeRecording(rec));
+			} catch (const std::exception& e) {
+				throw ToolError(500, e.what());
+			}
 			return json{ { "file", p.filename().string() }, { "validated", value } };
 		}
 

@@ -27,6 +27,39 @@ namespace dvb::FormSearchLogic
 		return !it.empty();
 	}
 
+	std::string_view NormalizeFormTypeName(std::string_view a_input)
+	{
+		struct Alias
+		{
+			std::string_view alias;
+			std::string_view target;
+		};
+		constexpr std::array<Alias, 17> kTypeAliases{
+			Alias{ "armor", "Armor" },
+			Alias{ "armo", "Armor" },
+			Alias{ "armoraddon", "ArmorAddon" },
+			Alias{ "armature", "ArmorAddon" },
+			Alias{ "arma", "ArmorAddon" },
+			Alias{ "headpart", "HeadPart" },
+			Alias{ "head", "HeadPart" },
+			Alias{ "hdpt", "HeadPart" },
+			Alias{ "idle", "Idle" },
+			Alias{ "npc", "NPC" },
+			Alias{ "npc_", "NPC" },
+			Alias{ "actor", "NPC" },
+			Alias{ "achr", "NPC" },
+			Alias{ "weapon", "Weapon" },
+			Alias{ "weap", "Weapon" },
+			Alias{ "misc", "Misc" },
+			Alias{ "miscellaneous", "Misc" },
+		};
+		for (const auto& entry : kTypeAliases) {
+			if (EqualsCI(a_input, entry.alias))
+				return entry.target;
+		}
+		return a_input;
+	}
+
 	std::string_view HeadPartTypeName(int a_type)
 	{
 		return a_type >= 0 && static_cast<std::size_t>(a_type) < kHeadPartTypes.size() ? kHeadPartTypes[static_cast<std::size_t>(a_type)] : std::string_view{};

@@ -21,6 +21,7 @@
 #include "Server.h"          // dvb::RunTool / OpenRecordingsFolder
 
 #include <cstdint>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -81,7 +82,8 @@ namespace dvb::UI
 			// (firing stays the raw sink; zero double-fire).
 			bool OnAsyncInput(const void* a_event) override
 			{
-				bool consumed = false;
+				std::lock_guard lock(m_hotkeyMtx);
+				bool            consumed = false;
 				if (FUCK::UpdateManagedHotkey(a_event, m_recordHK)) {
 					ApplyBind(m_recordHK, true, m_recordWarn);
 					consumed = true;
@@ -96,6 +98,7 @@ namespace dvb::UI
 			// Abort any in-progress rebind when the menu closes, so a hotkey isn't left stuck binding.
 			void OnClose() override
 			{
+				std::lock_guard lock(m_hotkeyMtx);
 				FUCK::AbortManagedHotkey(m_recordHK);
 				FUCK::AbortManagedHotkey(m_replayHK);
 			}
@@ -175,6 +178,7 @@ namespace dvb::UI
 
 			void RenderHotkeys()
 			{
+				std::lock_guard lock(m_hotkeyMtx);
 				if (!m_seeded) {
 					int  recKey = 0, repKey = 0;
 					bool recShift = false, repShift = false;
@@ -393,6 +397,7 @@ namespace dvb::UI
 			FUCK::ManagedHotkey   m_recordHK, m_replayHK;
 			bool                  m_seeded = false;
 			std::string           m_recordWarn, m_replayWarn;
+			std::mutex            m_hotkeyMtx;
 			std::string           m_lastError, m_lastStatus;  // last action outcome (red / green)
 		};
 

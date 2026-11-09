@@ -268,7 +268,7 @@ namespace dvb::Recording::ReplayDriver
 		return true;
 	}
 
-	bool Playback::Sleep(long a_ms)
+	bool Playback::Sleep(long a_ms, const std::function<bool()>& a_isCancelled)
 	{
 		if (a_ms <= 0)
 			return true;
@@ -280,12 +280,14 @@ namespace dvb::Recording::ReplayDriver
 		*m_deadlineGameMs += static_cast<double>(a_ms);
 		GameClock::Engaged engaged;
 		// Wall-clock backstop: bounds a genuinely stalled main thread (frame counter not
-		// advancing) rather than blocking this worker forever; full cooperative cancellation
-		// through Finish()/Stop() is a larger, separate change.
+		// advancing) rather than blocking this worker forever; cooperative cancellation stops early.
 		const auto wallDeadline = std::chrono::steady_clock::now() +
 		                          std::chrono::milliseconds(static_cast<long long>(a_ms / TimeScaleControl::kMinScale) + 5000);
-		while (GameClock::Now() < *m_deadlineGameMs && std::chrono::steady_clock::now() < wallDeadline)
+		while (GameClock::Now() < *m_deadlineGameMs && std::chrono::steady_clock::now() < wallDeadline) {
+			if (a_isCancelled && a_isCancelled())
+				return false;
 			std::this_thread::sleep_for(kSleepSlice);
+		}
 		return GameClock::Now() >= *m_deadlineGameMs;
 	}
 

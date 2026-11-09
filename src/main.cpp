@@ -12,6 +12,7 @@
 #include "HostApi.h"
 #include "InputHotkeys.h"
 #include "KeyboardInput.h"
+#include "MainThread.h"
 #include "Recording.h"
 #include "RecordingsMenu.h"
 #include "Server.h"
@@ -204,6 +205,7 @@ namespace
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
 	SKSE::Init(a_skse);
+	dvb::MainThread::SetMainThread();
 	InitLogging();
 	SKSE::AllocTrampoline(1 << 10);
 	logs::info("devbench {} loaded", DEVBENCH_VERSION_STRING);

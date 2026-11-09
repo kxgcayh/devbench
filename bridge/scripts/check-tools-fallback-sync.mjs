@@ -18,6 +18,7 @@ if (!baseRef) {
 // literal of three or more characters: tool text and schema keys are always literals.
 const REGISTRATION_FILES = [
   "src/Tools.cpp",
+  "src/Dialogue.cpp",
   "src/Capture.cpp",
   "src/HostApi.cpp",
   "src/KeyboardInput.cpp",

@@ -16,7 +16,7 @@ namespace dvb
 		void WriteJson(httplib::Response& a_res, int a_status, const json& a_body)
 		{
 			a_res.status = a_status;
-			a_res.set_content(a_body.dump(), "application/json");
+			a_res.set_content(a_body.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");
 		}
 	}
 
@@ -76,7 +76,7 @@ namespace dvb
 			for (const auto& d : m_registry.List())
 				arr.push_back(json{ { "name", d.name }, { "description", d.description },
 					{ "inputSchema", d.inputSchema }, { "readOnly", d.readOnly } });
-			WriteJson(res, 200, json{ { "tools", std::move(arr) }, { "mcp_bridge", BridgeDiscoveryInfo() } });
+			WriteJson(res, 200, json{ { "tools", std::move(arr) }, { "mcp_bridge", BridgeDiscoveryInfo() }, { "identity", InstanceIdentity() } });
 		});
 
 		// Invoke: POST /api/tool/<name>, body is the arguments object.
@@ -95,7 +95,7 @@ namespace dvb
 			if (r.ok)
 				WriteJson(res, 200, r.value);
 			else
-				WriteJson(res, r.errorCode ? r.errorCode : 500, json{ { "error", r.errorMessage }, { "code", r.errorCode } });
+				WriteJson(res, r.errorCode ? r.errorCode : 500, r.ErrorBody());
 		});
 
 		// Deliberately GET, not POST (a bodyless POST stalls on httplib's read timeout; see
@@ -124,7 +124,9 @@ namespace dvb
 			uint64_t since = 0;
 			if (req.has_param("since")) {
 				try {
-					since = std::stoull(req.get_param_value("since"));
+					const auto param = req.get_param_value("since");
+					if (!param.empty() && param[0] != '-')
+						since = std::stoull(param);
 				} catch (...) {
 				}
 			}

@@ -56,3 +56,10 @@ TEST_CASE("string payload passes through unquoted")
 	// A string is surfaced as-is, not JSON-re-encoded to "\"pong\"".
 	CHECK(content[0]["text"] == "pong");
 }
+
+TEST_CASE("non-UTF-8 game text does not throw")
+{
+	// Skyrim names are code-page bytes in non-English installs; strict dump() would throw.
+	const json content = ToContentBlocks(json{ { "name", "Bj\xF8rn" } });
+	CHECK(IsTextBlock(content[0]));
+}

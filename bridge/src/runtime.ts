@@ -9,6 +9,8 @@ export interface Target {
   label: string;
   /** Directory containing runtime.json — the Data-relative path or its %LOCALAPPDATA% mirror. */
   runtimeDir: string;
+  /** Known candidate directories where runtime.json may appear once the game launches. */
+  candidates?: string[];
 }
 
 interface RuntimeJson {
@@ -68,7 +70,8 @@ export function resolveTarget(args: {
   install?: string;
 }): Target {
   if (args.install) {
-    return { label: args.install, runtimeDir: runtimeDirFor(args.install) };
+    const dir = runtimeDirFor(args.install);
+    return { label: args.install, runtimeDir: dir, candidates: [dir] };
   }
   if (isSupportedGame(args.game)) {
     const candidates = (
@@ -77,20 +80,33 @@ export function resolveTarget(args: {
     const localAppDataDir = localAppDataDevbenchDir(args.game);
     if (localAppDataDir) candidates.push(localAppDataDir);
     const found = freshestExisting(candidates);
-    if (!found) {
-      throw new Error(
-        `Could not find a devbench install for --game ${args.game} in any default Steam ` +
-          `location. Pass --install <path-to-Skyrim-folder> instead.`,
-      );
-    }
-    return { label: args.game.toUpperCase(), runtimeDir: found };
+    // If no runtime.json exists yet (game not yet started), pick the first candidate directory that
+    // exists on disk, or fall back to the primary default candidate. This allows the bridge to start
+    // up and serve the fallback tools list instead of exiting immediately.
+    const fallbackDir =
+      candidates.find((d) => {
+        try {
+          return statSync(d).isDirectory();
+        } catch {
+          return false;
+        }
+      }) ?? candidates[0];
+
+    return {
+      label: args.game.toUpperCase(),
+      runtimeDir: found ?? fallbackDir,
+      candidates,
+    };
   }
   throw new Error("devbench-bridge requires --game se|vr or --install <path>.");
 }
 
 /** Read the live port + base URL for a target, fresh every call. */
 export function resolveBaseUrl(target: Target): string {
-  const raw = readFileSync(join(target.runtimeDir, "runtime.json"), "utf-8");
+  const dir =
+    (target.candidates ? freshestExisting(target.candidates) : undefined) ??
+    target.runtimeDir;
+  const raw = readFileSync(join(dir, "runtime.json"), "utf-8");
   const parsed = JSON.parse(raw) as RuntimeJson;
   if (
     !Number.isInteger(parsed.port) ||
@@ -98,7 +114,7 @@ export function resolveBaseUrl(target: Target): string {
     parsed.port > 65535
   ) {
     throw new Error(
-      `runtime.json at ${target.runtimeDir} has no valid "port" field (1-65535).`,
+      `runtime.json at ${dir} has no valid "port" field (1-65535).`,
     );
   }
   return `http://127.0.0.1:${parsed.port}`;

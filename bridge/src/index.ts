@@ -6,7 +6,12 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { callTool, GameUnavailableError, listTools } from "./proxy.js";
+import {
+  callTool,
+  GameUnavailableError,
+  listTools,
+  ToolResponseError,
+} from "./proxy.js";
 import { isSupportedGame, resolveTarget } from "./runtime.js";
 import { printSetupSnippet } from "./setup.js";
 import toolsFallback from "./tools-fallback.json" with { type: "json" };
@@ -106,15 +111,25 @@ async function main(): Promise<void> {
         content: [{ type: "text", text: JSON.stringify(result ?? null) }],
       };
     } catch (e) {
-      const message =
-        e instanceof GameUnavailableError
-          ? `game not running (target: ${target.label})`
-          : (e as Error).message;
+      let message: string;
+      if (e instanceof GameUnavailableError) {
+        message = `game not running (target: ${target.label})`;
+      } else if (e instanceof Error) {
+        message = e.message;
+      } else {
+        message = String(e);
+      }
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify({ ok: false, reason: message }),
+            text: JSON.stringify({
+              ok: false,
+              reason: message,
+              ...(e instanceof ToolResponseError && e.body.details
+                ? { error: e.body.error, code: e.body.code, details: e.body.details }
+                : {}),
+            }),
           },
         ],
         isError: true,

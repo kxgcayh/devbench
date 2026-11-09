@@ -4,7 +4,12 @@
 
 #include "test_framework.h"
 
+#include "MainThread.h"
+#include "MainThreadTask.h"
 #include "ToolRegistry.h"
+
+#include <latch>
+#include <thread>
 
 using dvb::json;
 using dvb::ToolContext;
@@ -205,4 +210,57 @@ TEST_CASE("strict mode rejects an unknown key with 400 and does not run the hand
 	ToolContext internal;
 	internal.internal = true;  // scenario/replay steps are never rejected
 	CHECK(reg.Invoke("t", json{ { "params", 1 } }, internal).ok);
+}
+
+TEST_CASE("queued timeout is distinguishable from an action with unknown outcome")
+{
+	using namespace std::chrono_literals;
+	using dvb::MainThread::QueuedTask;
+	for (const bool start : { false, true }) {
+		ToolRegistry reg;
+		int          mutations = 0;
+		std::latch   started(1), finish(1);
+		QueuedTask   task([&]() -> json {
+			started.count_down();
+			finish.wait();
+			return ++mutations;
+		},
+			QueuedTask::Clock::now() + 1min);
+		auto         future = task.GetFuture();
+		std::jthread gameThread;
+		if (start) {
+			gameThread = std::jthread([&]() { task.Run(); });
+			started.wait();
+		}
+		const bool abandoned = task.Abandon();
+		reg.Register(Desc("timeout"), [&](const json&, const ToolContext&) -> json {
+			throw dvb::MainThread::TaskTimeout(!abandoned, "unchanged timeout message");
+		});
+		const auto result = reg.Invoke("timeout", json::object(), {});
+		CHECK(!result.ok);
+		CHECK(result.errorCode == 504);
+		CHECK(result.errorMessage == "unchanged timeout message");
+		CHECK(result.errorDetails["taskStarted"] == start);
+		CHECK(result.errorDetails["abandoned"] == !start);
+		CHECK(result.errorDetails["outcome"] == (start ? "unknown" : "not_started"));
+		const auto rest = result.ErrorBody();
+		const auto mcpText = result.ErrorText();
+		CHECK(mcpText.starts_with("[504] unchanged timeout message\n"));
+		CHECK(json::parse(mcpText.substr(mcpText.find('\n') + 1)) == rest);
+		finish.count_down();
+		if (start) {
+			gameThread.join();
+			CHECK(future.get() == 1);
+		} else {
+			task.Run();
+		}
+		CHECK(mutations == (start ? 1 : 0));
+	}
+}
+
+TEST_CASE("ordinary errors preserve their original REST and MCP shapes")
+{
+	const auto result = ToolResult::Failure(400, "bad argument");
+	CHECK(result.ErrorBody() == (json{ { "error", "bad argument" }, { "code", 400 } }));
+	CHECK(result.ErrorText() == "[400] bad argument");
 }

@@ -296,6 +296,20 @@ TEST_CASE("input replay can be disabled without altering legacy steps")
 	CHECK(plan["inputOwner"] == "");
 }
 
+TEST_CASE("input replay disabled still normalizes atMs into wait timeline")
+{
+	const json steps = json::array({
+		json{ { "atMs", 125 }, { "pose", json::array({ 1, 2, 3, 4, 5 }) }, { "wait", 25 } },
+	});
+	const json plan = InterleaveReplayableActivity(steps, json::array(), "recording:test", false);
+	std::int64_t totalWait = 0;
+	for (const auto& step : plan["steps"])
+		if (step.contains("wait"))
+			totalWait += step["wait"].get<std::int64_t>();
+	CHECK(totalWait == 150);
+	CHECK(plan["report"]["enabled"] == false);
+}
+
 TEST_CASE("key event matching only applies to keyboard button and char events")
 {
 	CHECK(IsKeyEventFor(Button(1, 1, "keyboard", "down", 65), { 65, 66 }));

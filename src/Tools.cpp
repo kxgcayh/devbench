@@ -9,6 +9,7 @@
 #include "AssetInfo.h"
 #include "Capture.h"
 #include "ConsoleLogCapture.h"
+#include "Dialogue.h"
 #include "DifficultyLogic.h"
 #include "DrawStats.h"
 #include "DrawStatsLogic.h"
@@ -18,6 +19,7 @@
 #include "FreeCamera.h"
 #include "GameEvents.h"
 #include "GameState.h"
+#include "Gfx.h"
 #include "HeldLightsLogic.h"
 #include "HostApi.h"
 #include "InspectLogic.h"
@@ -28,6 +30,7 @@
 #include "Recording.h"
 #include "ReplayDriver.h"
 #include "ReplayTrajectory.h"
+#include "RunRegistry.h"
 #include "ScenarioPolicy.h"
 #include "Server.h"
 #include "TimeScaleControl.h"
@@ -426,9 +429,7 @@ namespace dvb
 				}
 				const size_t matched = entries.size();  // post-filter, pre-limit — see count/truncated below
 				if (a_args.contains("limit")) {
-					const int limit = a_args["limit"].get<int>();
-					if (limit <= 0)
-						throw ToolError(400, std::format("invalid limit '{}' (must be > 0)", limit));
+					const int limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 1, 100000));
 					if (static_cast<size_t>(limit) < entries.size())
 						entries.resize(limit);
 				}
@@ -479,10 +480,11 @@ namespace dvb
 						// absorbed above instead of left for the engine to see, walk them by hand so
 						// Calendar.GetMonth/GetYear don't go stale after a multi-day jump.
 						if (cal->gameDay && cal->gameMonth && cal->gameYear) {
-							auto day = static_cast<std::int32_t>(cal->gameDay->value);
-							auto month = static_cast<std::int32_t>(cal->gameMonth->value);  // 0-11
+							auto day = std::clamp(static_cast<std::int32_t>(cal->gameDay->value), 1, 31);
+							auto month = std::clamp(static_cast<std::int32_t>(cal->gameMonth->value), 0, 11);  // 0-11
 							auto year = static_cast<std::int32_t>(cal->gameYear->value);
 							for (auto remaining = dayDelta; remaining > 0; --remaining) {
+								month = std::clamp(month, 0, 11);
 								if (day < RE::Calendar::DAYS_IN_MONTH[month]) {
 									++day;
 								} else {
@@ -497,9 +499,11 @@ namespace dvb
 								if (day > 1) {
 									--day;
 								} else {
-									if (month-- == 0) {
+									if (month <= 0) {
 										month = 11;
 										--year;
+									} else {
+										--month;
 									}
 									day = RE::Calendar::DAYS_IN_MONTH[month];
 								}
@@ -815,12 +819,16 @@ namespace dvb
 				}
 				// Answer the active MessageBoxMenu by button index (default 0) via CommonLib's
 				// SelectOption() — runs the modal's callback and dismisses it; no detour.
-				const int index = a_args.value("index", 0);
-				auto*     task = SKSE::GetTaskInterface();
-				if (!task)
-					throw ToolError(500, "SKSE TaskInterface unavailable");
-				task->AddTask([index]() { RE::MessageBoxMenu::SelectOption(index); });
-				return json{ { "queued", true }, { "action", "accept" }, { "index", index } };
+				const int index = static_cast<int>(ParseBoundedIntegerArgument(a_args, "index", 0, 0, 100));
+				return MainThread::RunAndWait([index]() -> json {
+					auto* data = RE::MessageBoxMenu::GetCurrentMessageBoxData();
+					if (!data)
+						return json{ { "accepted", false }, { "reason", "no active MessageBoxMenu" } };
+					if (static_cast<size_t>(index) >= data->buttonText.size())
+						return json{ { "accepted", false }, { "reason", std::format("button index {} out of range (menu has {} buttons)", index, data->buttonText.size()) } };
+					RE::MessageBoxMenu::SelectOption(index);
+					return json{ { "accepted", true }, { "index", index } };
+				});
 			}
 
 			throw ToolError(400, std::format("unknown action '{}' (list|open|close|describe|accept|invoke)", action));
@@ -1346,7 +1354,9 @@ namespace dvb
 				{ "misc", "misc" }, { "light", "ligh" }, { "furniture", "furn" },
 				{ "activator", "acti" }, { "flora", "flor" }, { "tree", "tree" },
 				{ "static", "stat" }, { "key", "keym" }, { "scroll", "scrl" },
-				{ "ammo", "ammo" }, { "soulgem", "slgm" }
+				{ "ammo", "ammo" }, { "soulgem", "slgm" },
+				{ "armoraddon", "arma" }, { "armature", "arma" },
+				{ "headpart", "hdpt" }, { "head", "hdpt" }, { "idle", "idle" }
 			};
 			if (auto it = kAlias.find(a_filter); it != kAlias.end())
 				return it->second;
@@ -1549,9 +1559,7 @@ namespace dvb
 			if (kind == "inventory") {
 				const std::string formId = a_args.value("formId", std::string{});
 				const std::string typeFilter = a_args.value("formType", std::string{});
-				const int         limit = a_args.value("limit", 100);
-				if (limit < 0)
-					throw ToolError(400, "inspect inventory: 'limit' must be >= 0");
+				const int         limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				return MainThread::RunAndWait([=]() -> json {
 					auto lower = [](std::string s) {
 						std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -1605,9 +1613,7 @@ namespace dvb
 			// quests: the journal — quests that are running or completed, each with its current stage
 			// and non-dormant objectives. 'active' marks the player's tracked quest. 'limit' default 100.
 			if (kind == "quests") {
-				const int limit = a_args.value("limit", 100);
-				if (limit < 0)
-					throw ToolError(400, "inspect quests: 'limit' must be >= 0");
+				const int limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				return MainThread::RunAndWait([=]() -> json {
 					auto* dh = RE::TESDataHandler::GetSingleton();
 					if (!dh)
@@ -1850,11 +1856,9 @@ namespace dvb
 				const std::string typeFilter = a_args.value("formType", std::string{});
 				const std::string modelFilter = a_args.value("model", std::string{});
 				const double      radius = a_args.value("radius", 0.0);
-				const int         limit = a_args.value("limit", 100);
+				const int         limit = static_cast<int>(ParseBoundedIntegerArgument(a_args, "limit", 100, 0, 100000));
 				if (radius < 0.0)
 					throw ToolError(400, "inspect refs: 'radius' must be >= 0 (0 scans the whole loaded grid)");
-				if (limit < 0)
-					throw ToolError(400, "inspect refs: 'limit' must be >= 0");
 				return MainThread::RunAndWait([=]() -> json {
 					auto lower = [](std::string s) {
 						std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -2520,92 +2524,6 @@ namespace dvb
 			}
 		};
 
-		// Tracks in-flight/completed async runs — record{action:"replay"} (async by default) and
-		// scenario{action:"run", async:true} share this registry and its runId space, so a runId
-		// from either polls correctly via either tool's action="status". Entries are pruned once
-		// the retention cap is hit so a caller that never polls a finished run doesn't leak state.
-		class RunRegistry
-		{
-		public:
-			static RunRegistry& Get()
-			{
-				static RunRegistry inst;
-				return inst;
-			}
-
-			uint64_t NextId() { return ++m_seq; }
-
-			void Start(uint64_t a_runId)
-			{
-				std::lock_guard lock(m_mtx);
-				m_runs.emplace(a_runId, State{});
-				Prune();
-			}
-
-			// `st.ok` reflects the result's own "ok" field when present (a scenario/replay run
-			// that completed without throwing but failed an assertion has result.ok=false — that
-			// must not be reported as a top-level ok:true) rather than just "didn't throw".
-			void Finish(uint64_t a_runId, json a_result)
-			{
-				std::lock_guard lock(m_mtx);
-				State&          st = m_runs[a_runId];
-				st.done = true;
-				st.ok = a_result.is_object() ? a_result.value("ok", true) : true;
-				st.result = std::move(a_result);
-				st.hasResult = true;
-			}
-
-			void Fail(uint64_t a_runId, std::string a_error)
-			{
-				std::lock_guard lock(m_mtx);
-				State&          st = m_runs[a_runId];
-				st.done = true;
-				st.ok = false;
-				st.error = std::move(a_error);
-			}
-
-			// hasResult (Finish, even with ok:false — a failed assertion, not a thrown exception)
-			// vs error-only (Fail — the run itself threw) are distinct outcomes; conflating them
-			// on `ok` alone would discard the actual transcript for a failed-but-completed run.
-			std::optional<json> Status(uint64_t a_runId)
-			{
-				std::lock_guard lock(m_mtx);
-				const auto      it = m_runs.find(a_runId);
-				if (it == m_runs.end())
-					return std::nullopt;
-				const State& st = it->second;
-				if (!st.done)
-					return json{ { "runId", a_runId }, { "done", false } };
-				json out{ { "runId", a_runId }, { "done", true }, { "ok", st.ok } };
-				out[st.hasResult ? "result" : "error"] = st.hasResult ? st.result : json(st.error);
-				return out;
-			}
-
-		private:
-			struct State
-			{
-				bool        done = false;
-				bool        ok = false;
-				bool        hasResult = false;
-				json        result;
-				std::string error;
-			};
-
-			// runId is a monotonic counter, so the smallest key is the oldest run. Never erase an
-			// in-flight (!done) one — Finish/Fail would recreate it via operator[], and a poll in
-			// between would 404 on a run that's actually still executing.
-			void Prune()
-			{
-				constexpr size_t kRetention = 128;  // shared by two tools now; headroom over the old 64
-				for (auto it = m_runs.begin(); m_runs.size() > kRetention && it != m_runs.end();)
-					it = it->second.done ? m_runs.erase(it) : std::next(it);
-			}
-
-			std::atomic<uint64_t>     m_seq{ 0 };
-			std::mutex                m_mtx;
-			std::map<uint64_t, State> m_runs;
-		};
-
 		/// Which steps of a scenario run hold the recorder's replay mark.
 		enum class ReplayMarking
 		{
@@ -2617,6 +2535,7 @@ namespace dvb
 		{
 			ReplayMarking                    replayMarking = ReplayMarking::TrajectorySpan;
 			std::function<void(std::size_t)> beforeStep;  // called with each step's index right before it runs
+			std::function<bool()>            isCancelled;
 		};
 
 		/// Execute a scenario step list and return its complete transcript.
@@ -2639,10 +2558,19 @@ namespace dvb
 			// scenario tool wrapper and record.replay) always supply one.
 			const uint64_t runId = a_args.value("runId", static_cast<uint64_t>(0));
 
+			const auto checkCancelled = [&]() -> bool {
+				if (a_options.isCancelled && a_options.isCancelled())
+					return true;
+				if (runId != 0 && RunRegistry::Get().IsCancelled(runId))
+					return true;
+				return false;
+			};
+
 			json       results = json::array();
 			const auto t0 = steady_clock::now();
 			bool       anyFailure = false;
 			bool       aborted = false;
+			bool       cancelled = false;
 
 			// While the player is teleported along a trajectory, a recording running beside it must
 			// not re-sample the path: the issued setpos commands (seen by the console hook) carry it.
@@ -2654,12 +2582,20 @@ namespace dvb
 
 			Recording::ReplayDriver::Playback playback(steps, a_args.value("smoothPose", false));
 
-			for (int rep = 0; rep < repeat && !aborted; ++rep) {
+			for (int rep = 0; rep < repeat && !aborted && !cancelled; ++rep) {
+				if (checkCancelled()) {
+					cancelled = true;
+					break;
+				}
 				playback.Finish();
 				// Per-repetition, not per-run: a scene mismatch on rep N must not poison rep N+1's
 				// captures if rep N+1's own scene assert succeeds.
 				bool runSceneMismatch = false;
-				for (size_t i = 0; i < steps.size() && !aborted; ++i) {
+				for (size_t i = 0; i < steps.size() && !aborted && !cancelled; ++i) {
+					if (checkCancelled()) {
+						cancelled = true;
+						break;
+					}
 					if (a_options.beforeStep)
 						a_options.beforeStep(i);
 					const json& step = steps[i];
@@ -2701,8 +2637,18 @@ namespace dvb
 						if (playback.Handle(step)) {
 							r["kind"] = "pose";
 							r["ok"] = true;
-							if (step.contains("wait") && !playback.Sleep(step["wait"].get<long>()))
-								throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+							if (step.contains("wait")) {
+								const long waitMs = step["wait"].get<long>();
+								if (!playback.Sleep(waitMs, checkCancelled)) {
+									if (checkCancelled()) {
+										cancelled = true;
+										r["cancelled"] = true;
+										r["ok"] = false;
+										break;
+									}
+									throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+								}
+							}
 						} else if (step.contains("pose")) {
 							// Compact trajectory sample [x, y, z, yawDeg, pitchDeg] → the same
 							// player.setpos/setangle commands v1 stored as five steps (Recording::BuildScenario).
@@ -2745,20 +2691,37 @@ namespace dvb
 							}
 							if (poseOk) {
 								r["ok"] = true;
-								if (step.contains("wait") && !playback.Sleep(step["wait"].get<long>()))
-									throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+								if (step.contains("wait")) {
+									const long waitMs = step["wait"].get<long>();
+									if (!playback.Sleep(waitMs, checkCancelled)) {
+										if (checkCancelled()) {
+											cancelled = true;
+											r["cancelled"] = true;
+											r["ok"] = false;
+											break;
+										}
+										throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+									}
+								}
 							}
 						} else if (step.contains("wait")) {
 							const long ms = step["wait"].get<long>();
 							r["kind"] = "wait";
 							r["ms"] = ms;
-							if (!playback.Sleep(ms))
+							if (!playback.Sleep(ms, checkCancelled)) {
+								if (checkCancelled()) {
+									cancelled = true;
+									r["cancelled"] = true;
+									r["ok"] = false;
+									break;
+								}
 								throw ToolError(504, "replay wait stalled — the main thread did not advance game time within the wall-clock backstop");
+							}
 							r["ok"] = true;
 						} else if (step.contains("waitFor")) {
 							const WaitForSpec spec = ParseWaitFor(step);
 							const long        timeoutMs = step.value("timeoutMs", static_cast<long>(60000));
-							const long        pollMs = step.value("pollMs", static_cast<long>(100));
+							const long        pollMs = std::max(10L, step.value("pollMs", static_cast<long>(100)));
 							r["kind"] = "waitFor";
 							r["topic"] = spec.topic;
 							r["match"] = spec.match;
@@ -2770,6 +2733,10 @@ namespace dvb
 							bool       satisfied = false;
 							const auto deadline = steady_clock::now() + milliseconds(timeoutMs);
 							while (steady_clock::now() < deadline) {
+								if (checkCancelled()) {
+									cancelled = true;
+									break;
+								}
 								for (const auto& ev : a_events.Since(since)) {
 									since = ev.seq;
 									if (ev.topic == spec.topic && PayloadMatches(ev.payload, spec.match)) {
@@ -2783,6 +2750,11 @@ namespace dvb
 									AcceptModalIfMatch(acceptBody);
 								std::this_thread::sleep_for(milliseconds(pollMs));
 							}
+							if (cancelled) {
+								r["cancelled"] = true;
+								r["ok"] = false;
+								break;
+							}
 							r["satisfied"] = satisfied;
 							if (!satisfied) {
 								r["timedOut"] = true;
@@ -2791,18 +2763,27 @@ namespace dvb
 						} else if (step.contains("waitUntil")) {
 							const std::string cond = step["waitUntil"].get<std::string>();
 							const long        timeoutMs = step.value("timeoutMs", static_cast<long>(30000));
-							const long        pollMs = step.value("pollMs", static_cast<long>(250));
+							const long        pollMs = std::max(10L, step.value("pollMs", static_cast<long>(250)));
 							r["kind"] = "waitUntil";
 							r["cond"] = cond;
 							bool       satisfied = false;
 							const auto deadline = steady_clock::now() + milliseconds(timeoutMs);
 							do {
+								if (checkCancelled()) {
+									cancelled = true;
+									break;
+								}
 								if (CheckState(cond)) {
 									satisfied = true;
 									break;
 								}
 								std::this_thread::sleep_for(milliseconds(pollMs));
 							} while (steady_clock::now() < deadline);
+							if (cancelled) {
+								r["cancelled"] = true;
+								r["ok"] = false;
+								break;
+							}
 							r["satisfied"] = satisfied;
 							if (!satisfied) {
 								r["timedOut"] = true;
@@ -2960,6 +2941,9 @@ namespace dvb
 					if (!markWholeRun && trajectorySpan && i == trajectorySpan->last)
 						replayMark.Release();
 
+					if (cancelled)
+						break;
+
 					if (stepFailed) {
 						anyFailure = true;
 						if (!continueOnError)
@@ -2970,8 +2954,9 @@ namespace dvb
 
 			playback.Finish();
 			json summary{
-				{ "ok", !anyFailure },
+				{ "ok", !anyFailure && !cancelled },
 				{ "aborted", aborted },
+				{ "cancelled", cancelled },
 				{ "stepsRun", results.size() },
 				{ "elapsedMs", duration_cast<milliseconds>(steady_clock::now() - t0).count() },
 				{ "results", std::move(results) },
@@ -3417,11 +3402,12 @@ namespace dvb
 				const std::string formId = text("formId");
 				if (formId.empty())
 					throw ToolError(400, "'formId' (any form) is required for describe");
-				return MainThread::RunAndWait([formId]() -> json {
+				const bool withAnimation = BooleanArgument(a_args, "withAnimation", true);
+				return MainThread::RunAndWait([formId, withAnimation]() -> json {
 					auto* form = LookupFormArg(formId);
 					if (!form)
 						throw ToolError(404, std::format("'{}' is not a loaded form", formId));
-					return FormSearch::DescribeForm(form);
+					return FormSearch::DescribeForm(form, withAnimation);
 				},
 					std::chrono::milliseconds(15000));
 			}
@@ -3552,6 +3538,8 @@ namespace dvb
 		a_registry.Register(BuildInspectDescriptor(), &InspectHandler);
 		a_registry.Register(BuildMenuDescriptor(), &MenuHandler);
 		a_registry.Register(Capture::BuildCaptureDescriptor(), &Capture::Handle);
+		a_registry.Register(Gfx::BuildDescriptor(), &Gfx::Handle);
+		a_registry.Register(Dialogue::BuildDescriptor(), &Dialogue::Handle);
 
 		// When a mod registers a kind/menu/provider, rebuild that base tool's descriptor so the new
 		// key is discoverable on the first call (the registry's registration path re-registers it
@@ -3639,12 +3627,12 @@ namespace dvb
 		scenario.inputSchema = json{
 			{ "type", "object" },
 			{ "properties", json{
-								{ "action", json{ { "type", "string" }, { "enum", json::array({ "run", "status" }) }, { "description", "run (default, requires 'steps') | status (requires 'runId')" } } },
+								{ "action", json{ { "type", "string" }, { "enum", json::array({ "run", "status", "cancel" }) }, { "description", "run (default, requires 'steps') | status (requires 'runId') | cancel (requires 'runId')" } } },
 								{ "steps", json{ { "type", "array" }, { "description", "run: ordered steps; each is one of tool/wait/waitFor/waitUntil (see description)" }, { "items", json{ { "type", "object" } } } } },
 								{ "repeat", json{ { "type", "integer" }, { "description", "run: run the whole step list N times (default 1, max 1000)" } } },
 								{ "continueOnError", json{ { "type", "boolean" }, { "description", "run: keep going after a failed/timed-out step instead of aborting (default false)" } } },
 								{ "async", json{ { "type", "boolean" }, { "description", "run: return {queued:true, runId} immediately and run in the background (default false); true does not block" } } },
-								{ "runId", json{ { "type", "integer" }, { "description", "status: poll an async run started earlier (from run's 'runId')" } } },
+								{ "runId", json{ { "type", "integer" }, { "description", "status/cancel: async runId from earlier run" } } },
 							} },
 		};
 		a_registry.Register(std::move(scenario),
@@ -3658,15 +3646,28 @@ namespace dvb
 						return *st;
 					throw ToolError(404, std::format("unknown scenario runId {}", runId));
 				}
+				if (action == "cancel") {
+					if (!a_args.contains("runId"))
+						throw ToolError(400, "action='cancel' requires 'runId'");
+					const uint64_t runId = ParseRunId(a_args);
+					const auto     res = RunRegistry::Get().Cancel(runId);
+					if (res == RunRegistry::CancelResult::NotFound)
+						throw ToolError(404, std::format("unknown scenario runId {}", runId));
+					return json{
+						{ "action", "cancel" },
+						{ "runId", runId },
+						{ "cancelled", res == RunRegistry::CancelResult::Cancelled },
+						{ "alreadyDone", res == RunRegistry::CancelResult::AlreadyDone }
+					};
+				}
 				if (action != "run")
-					throw ToolError(400, std::format("unknown action '{}' (run|status)", action));
+					throw ToolError(400, std::format("unknown action '{}' (run|status|cancel)", action));
 				if (!a_args.contains("steps") || !a_args["steps"].is_array())
 					throw ToolError(400, "action='run' requires a 'steps' array");
 
-				uint64_t runId = a_args.value("runId", static_cast<uint64_t>(0));
-				if (!runId)
-					runId = RunRegistry::Get().NextId();
-				json argsWithId = a_args;
+				// Always server-assigned: a caller-chosen id could collide with a live replay's run.
+				const uint64_t runId = RunRegistry::Get().NextId();
+				json           argsWithId = a_args;
 				argsWithId["runId"] = runId;
 				const size_t numSteps = argsWithId["steps"].size();
 
@@ -3681,7 +3682,14 @@ namespace dvb
 						a_events.Publish("scenario.finished", json{ { "runId", runId }, { "ok", false }, { "error", e.what() } });
 						throw;
 					}
-					a_events.Publish("scenario.finished", json{ { "runId", runId }, { "ok", result.value("ok", false) }, { "stepsRun", result.value("stepsRun", 0) } });
+					const bool isCancelled = result.value("cancelled", false);
+					if (isCancelled)
+						a_events.Publish("scenario.cancelled", json{ { "runId", runId }, { "stepsRun", result.value("stepsRun", 0) } });
+					a_events.Publish("scenario.finished", json{
+															  { "runId", runId },
+															  { "ok", result.value("ok", false) },
+															  { "cancelled", isCancelled },
+															  { "stepsRun", result.value("stepsRun", 0) } });
 					return result;
 				};
 
@@ -3973,7 +3981,14 @@ namespace dvb
 						result["timeScaleChanges"] = scaleHold->Changes();
 						logs::info("devbench: replay finished — {} steps, ok={}",
 							result.value("stepsRun", 0), result.value("ok", false));
-						a_events.Publish("replay.finished", json{ { "runId", runId }, { "ok", result.value("ok", false) }, { "stepsRun", result.value("stepsRun", 0) } });
+						const bool isCancelled = result.value("cancelled", false);
+						if (isCancelled)
+							a_events.Publish("replay.cancelled", json{ { "runId", runId }, { "stepsRun", result.value("stepsRun", 0) } });
+						a_events.Publish("replay.finished", json{
+																{ "runId", runId },
+																{ "ok", result.value("ok", false) },
+																{ "cancelled", isCancelled },
+																{ "stepsRun", result.value("stepsRun", 0) } });
 						return result;
 					};
 
@@ -4004,6 +4019,18 @@ namespace dvb
 					if (auto st = RunRegistry::Get().Status(runId))
 						return *st;
 					throw ToolError(404, std::format("unknown replay runId {}", runId));
+				}
+				if (action == "cancel" && a_args.contains("runId")) {
+					const uint64_t runId = ParseRunId(a_args);
+					const auto     res = RunRegistry::Get().Cancel(runId);
+					if (res == RunRegistry::CancelResult::NotFound)
+						throw ToolError(404, std::format("unknown replay runId {}", runId));
+					return json{
+						{ "action", "cancel" },
+						{ "runId", runId },
+						{ "cancelled", res == RunRegistry::CancelResult::Cancelled },
+						{ "alreadyDone", res == RunRegistry::CancelResult::AlreadyDone }
+					};
 				}
 				return Recording::Handle(a_args, a_events);
 			});

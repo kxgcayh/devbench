@@ -1,5 +1,7 @@
 #include "Server.h"
 
+#include "BuildInfo.h"
+#include "LoopbackGuard.h"
 #include "McpAdapter.h"
 #include "RestAdapter.h"
 #include "Version.h"
@@ -156,6 +158,13 @@ namespace dvb
 			// before giving up with an empty 400. Shorten this so that mistake fails fast
 			// instead of stalling; GET /api/health is the real fix for liveness checks.
 			http->set_read_timeout(2, 0);
+			http->set_pre_routing_handler([](const httplib::Request& a_req, httplib::Response& a_res) {
+				if (IsLocalRequest(a_req.get_header_value("Host"), a_req.get_header_value("Origin")))
+					return httplib::Server::HandlerResponse::Unhandled;
+				a_res.status = 403;
+				a_res.set_content("{\"error\":\"forbidden: non-local Origin/Host\"}", "application/json");
+				return httplib::Server::HandlerResponse::Handled;
+			});
 			m_restAdapter->Mount(*http);
 		} else
 			logs::warn("devbench: cpp-mcp http() returned null; REST facade unavailable");
@@ -187,12 +196,12 @@ namespace dvb
 
 	void Server::Stop()
 	{
+		m_mcpAdapter.reset();  // before the server: its bus subscriber broadcasts through m_mcp
 		if (m_mcp) {
 			m_mcp->stop();
 			m_mcp.reset();
 		}
 		m_restAdapter.reset();
-		m_mcpAdapter.reset();
 		g_boundPort.store(0);
 		g_registry.store(nullptr);
 	}
@@ -221,14 +230,14 @@ namespace dvb
 		ToolContext ctx{ "ui" };
 		ctx.internal = true;  // menu-driven; don't log each call
 		const ToolResult r = registry->Invoke(a_name, a_args, ctx);
-		return r.ok ? r.value : json{ { "error", r.errorMessage }, { "code", r.errorCode } };
+		return r.ok ? r.value : r.ErrorBody();
 	}
 
 	json ListRecordingsCached()
 	{
 		using namespace std::chrono;
 		std::lock_guard lock(g_recCacheMtx);
-		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(1)) {
+		if (const auto now = steady_clock::now(); !g_recCacheValid || now - g_recCacheAt > seconds(5)) {
 			g_recCache = RunTool("recordings", json{ { "action", "list" } });
 			g_recCacheAt = now;
 			g_recCacheValid = true;
@@ -274,13 +283,28 @@ namespace dvb
 
 	json InstanceIdentity()
 	{
-		// pid/exe/vr are constant for the process lifetime — compute once. /api/health is
-		// polled frequently, so avoid a GetModuleFileNameA + path + string alloc per call;
-		// only the bound port (an atomic) is read live.
-		static const int         pid = static_cast<int>(::GetCurrentProcessId());
-		static const std::string exe = ExecutableName();
-		static const bool        vr = REL::Module::IsVR();
-		return json{ { "pid", pid }, { "port", BoundPort() }, { "exe", exe }, { "vr", vr } };
+		static const json identity = []() {
+			const auto pid = ::GetCurrentProcessId();
+			FILETIME   creation{}, exit{}, kernel{}, user{};
+			json       instanceId = nullptr;
+			if (::GetProcessTimes(::GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
+				const auto ticks = (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+				instanceId = std::format("{}-{:016x}", pid, ticks);
+			}
+			const bool  vr = REL::Module::IsVR();
+			const char* runtime = vr ? "vr" : (REL::Module::IsAE() ? "ae" : "se");
+			return json{
+				{ "pid", pid }, { "exe", ExecutableName() }, { "vr", vr },
+				{ "instanceId", instanceId },
+				{ "runtime", { { "name", runtime }, { "version", REL::Module::get().version().string(".") } } },
+				{ "build", { { "version", DEVBENCH_VERSION_STRING },
+							   { "gitCommit", std::string(DEVBENCH_GIT_COMMIT).empty() ? json(nullptr) : json(DEVBENCH_GIT_COMMIT) },
+							   { "dirty", DEVBENCH_GIT_DIRTY < 0 ? json(nullptr) : json(DEVBENCH_GIT_DIRTY != 0) } } }
+			};
+		}();
+		auto result = identity;
+		result["port"] = BoundPort();
+		return result;
 	}
 
 	json BridgeDiscoveryInfo()

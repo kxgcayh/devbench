@@ -129,6 +129,12 @@ namespace dvb
 			if (const auto it = j.find("alwaysActive"); it != j.end() && it->is_boolean())
 				cfg.alwaysActive = it->get<bool>();
 
+			if (cfg.port <= 0 || cfg.port > 65535) {
+				const int defaultPort = REL::Module::IsVR() ? 8921 : 8920;
+				logs::warn("devbench: port {} out of range (1..65535) — using default {}", cfg.port, defaultPort);
+				cfg.port = defaultPort;
+			}
+
 			// Migrate forward: if the file predates any key (e.g. an install from before
 			// the record hotkeys existed), rewrite it so the new keys appear with their
 			// defaults — otherwise a user never discovers options added in an update. The
@@ -149,7 +155,9 @@ namespace dvb
 			}
 		} catch (const std::exception& e) {
 			logs::warn("devbench: bad config ({}) — using defaults", e.what());
-			return Config{};
+			Config fallback;
+			fallback.port = REL::Module::IsVR() ? 8921 : 8920;
+			return fallback;
 		}
 		logs::info("devbench: config enabled={} port={} logLevel={}", cfg.enabled, cfg.port, cfg.logLevel);
 		return cfg;
