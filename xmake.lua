@@ -219,6 +219,7 @@ add_files("src/DialogueLogic.cpp")
 add_files("src/FormSearchLogic.cpp") -- form search matching, head part types and armor slot masks; pure logic
 add_files("src/HavokAnimationLogic.cpp") -- animation duration and track counts from a Havok packfile; pure logic
 add_files("src/PluginHeaderLogic.cpp") -- author, description and masters from a plugin's TES4 record; pure logic
+add_files("src/Sha256Logic.cpp") -- SHA-256 of a game file the engine read; pure logic
 add_files("src/InspectLogic.cpp") -- lights scope/budget/ordering and the handsReady predicate; pure logic
 add_files("src/ReplayTrajectory.cpp") -- pose keyframe sampling/interpolation; pure logic
 add_files("src/RecordingActivity.cpp") -- activity contract + input/trajectory interleave; pure logic

@@ -3517,7 +3517,11 @@ namespace dvb
 			"description, 'limit', 'offset') lists the loaded plugins, full then light, each with that header and its "
 			"load-order index. 'asset' (param 'path', relative to Data/Meshes or to Data) reads a game file from the "
 			"archives or loose files and reports { path, found, resolvedPath, bytes } and, for a Havok animation, its "
-			"className, durationSeconds and track counts.";
+			"className, durationSeconds and track counts. With 'hash':true, asset instead returns { path, found, resolvedPath, "
+			"bytes, sha256 } for any file type (no Havok parsing): the SHA-256 of the bytes the engine itself read, loose files "
+			"and archives in load order, so it shows what an archive really delivers; 'paths' (an array of 1..128 paths, "
+			"instead of 'path') reads several and returns { requested, readBytes, results }, with skipped:'byte budget' on any "
+			"path left unread after 128 MiB. A file of 32 MiB or more reports truncated:true and no sha256.";
 		forms.inputSchema = json{
 			{ "type", "object" },
 			{ "properties", json{
@@ -3534,6 +3538,8 @@ namespace dvb
 								{ "formId", json{ { "type", "string" }, { "description", "headParts: the actor reference; describe: any form (FormID like 0xFF000D62, or EditorID)" } } },
 								{ "filter", json{ { "type", "string" }, { "description", "plugins: case-insensitive substring of the plugin name, author or description" } } },
 								{ "path", json{ { "type", "string" }, { "description", "asset: a game file path, relative to Data/Meshes or to Data (e.g. Actors/Character/Animations/Foo.hkx)" } } },
+								{ "paths", json{ { "type", "array" }, { "items", json{ { "type", "string" } } }, { "description", "asset: 1..128 game file paths read in one call (instead of path); returns sha256 per file when hash is true" } } },
+								{ "hash", json{ { "type", "boolean" }, { "description", "asset: return the SHA-256 of the bytes the engine read (any file type; skips Havok parsing), default false" } } },
 							} },
 			{ "required", json::array({ "action" }) },
 		};
@@ -3566,9 +3572,26 @@ namespace dvb
 			}
 
 			if (action == "asset") {
+				const bool hash = BooleanArgument(a_args, "hash", false);
+				if (a_args.contains("paths")) {
+					if (a_args.contains("path"))
+						throw ToolError(400, "give 'path' or 'paths' for asset, not both");
+					const auto& list = a_args["paths"];
+					if (!list.is_array() || list.empty() || list.size() > 128)
+						throw ToolError(400, "'paths' must be an array of 1..128 game file paths");
+					std::vector<std::string> paths;
+					for (const auto& entry : list) {
+						if (!entry.is_string() || entry.get<std::string>().empty())
+							throw ToolError(400, "every entry of 'paths' must be a non-empty string");
+						paths.push_back(entry.get<std::string>());
+					}
+					return MainThread::RunAndWait([paths = std::move(paths), hash]() -> json { return AssetInfo::Files(paths, hash); }, std::chrono::milliseconds(30000));
+				}
 				const std::string path = text("path");
 				if (path.empty())
 					throw ToolError(400, "'path' (a game file path, relative to Data or to Data/Meshes) is required for asset");
+				if (hash)
+					return MainThread::RunAndWait([path]() -> json { return AssetInfo::File(path, true); }, std::chrono::milliseconds(30000));
 				return MainThread::RunAndWait([path]() -> json { return AssetInfo::Animation(path); }, std::chrono::milliseconds(30000));
 			}
 

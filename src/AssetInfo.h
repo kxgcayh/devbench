@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace dvb::AssetInfo
 {
@@ -28,4 +29,14 @@ namespace dvb::AssetInfo
 	/// beside the Animation description of the clip's file. A graph names its clip after the event, so a clip that is not
 	/// named for its event is not found (found false, with a note).
 	json IdleAnimation(const std::string& a_file, const std::string& a_event);
+
+	/// Main thread. A game file read through the engine's resource system, as the game itself would load it (loose files and
+	/// archives in load order): { path, found, resolvedPath, bytes } and, when a_hash, sha256 of the bytes read. It reads at
+	/// most 32 MiB; a larger file reports truncated:true and no sha256, so a hash is never of a partial read. found is false
+	/// when no file by that path is readable, and also for a zero-byte file, which the stream reports as unreadable.
+	json File(const std::string& a_path, bool a_hash);
+
+	/// Main thread. File for each of a_paths, in order, as { requested, readBytes, results }. A call reads at most 128 MiB in
+	/// total; a path left unread for that reason carries skipped:"byte budget", so a short answer is never silent.
+	json Files(const std::vector<std::string>& a_paths, bool a_hash);
 }

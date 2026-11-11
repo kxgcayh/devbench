@@ -3,6 +3,7 @@
 #include "FormSearchLogic.h"
 #include "HavokAnimationLogic.h"
 #include "PluginHeaderLogic.h"
+#include "Sha256Logic.h"
 #include "ToolRegistry.h"
 
 #include <RE/B/BSResourceNiBinaryStream.h>
@@ -223,6 +224,40 @@ namespace dvb::AssetInfo
 	{
 		std::vector<std::uint8_t> bytes;
 		return DescribeFile(a_path, bytes);
+	}
+
+	json File(const std::string& a_path, bool a_hash)
+	{
+		json                      out{ { "path", a_path }, { "found", false } };
+		std::vector<std::uint8_t> bytes;
+		std::string               resolved;
+		if (!IsSafeGamePath(a_path) || !ReadGameFile(WithBackslashes(a_path), bytes, resolved))
+			return out;
+		out["found"] = true;
+		out["resolvedPath"] = resolved;
+		out["bytes"] = bytes.size();
+		if (bytes.size() >= kMaxFileBytes)
+			out["truncated"] = true;
+		else if (a_hash)
+			out["sha256"] = Sha256Logic::Hex(bytes);
+		return out;
+	}
+
+	json Files(const std::vector<std::string>& a_paths, bool a_hash)
+	{
+		constexpr std::size_t kByteBudget = 128u << 20;
+		json                  results = json::array();
+		std::size_t           readBytes = 0;
+		for (const auto& path : a_paths) {
+			if (readBytes >= kByteBudget) {
+				results.push_back(json{ { "path", path }, { "skipped", "byte budget" } });
+				continue;
+			}
+			auto entry = File(path, a_hash);
+			readBytes += entry.value("bytes", std::size_t{ 0 });
+			results.push_back(std::move(entry));
+		}
+		return json{ { "requested", a_paths.size() }, { "readBytes", readBytes }, { "results", std::move(results) } };
 	}
 
 	json IdleAnimation(const std::string& a_file, const std::string& a_event)
