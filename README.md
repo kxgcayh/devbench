@@ -343,7 +343,9 @@ Other mods add their own tools via the C ABI (see [Use devbench from your mod](#
 A tutorial, a survival hint or a message box stops input until it is dismissed, and an agent (or a headless
 script) that does not notice it just sees every action fail. So while a blocking menu is open **every tool
 reply carries `blockedBy`**: `[{ "name": "Tutorial Menu", "hint": "menu action=close name=\"Tutorial Menu\"" }]`.
-A failed call also gets the same text appended to its error. `modal.blocked` and `modal.cleared` events fire
+A failed call also gets the same text appended to its error. `modal.blocked` (once per blocking menu that opens) and
+`modal.cleared` (once nothing blocks any more, named for the menu whose close cleared it; a blocker that closes while
+another is still open gets no `modal.cleared` of its own) events fire
 on the event stream. Always-open menus (`HUD Menu`, `Cursor Menu`, `Fader Menu`, `Mist Menu`, …) never count, and neither does a
 mod's HUD overlay (TrueHUD, a cast bar, an oxygen meter): when a menu opens, devbench reads its engine flags once
 and counts it as blocking only if it is not always-open and pauses the game, is modal, uses the cursor or freeze-frames
