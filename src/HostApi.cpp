@@ -82,8 +82,8 @@ namespace dvb::HostApi
 			}
 
 			bool RegisterTool(const char* a_name, const char* a_descriptorJson,
-				DevBenchAPI::ToolFn a_handler, void* a_ctx) override try
-			{
+				DevBenchAPI::ToolFn a_handler, void* a_ctx) override
+			try {
 				if (!g_registry || !a_name || !a_handler)
 					return false;
 

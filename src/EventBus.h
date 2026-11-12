@@ -132,7 +132,7 @@ namespace dvb
 		}
 
 	private:
-		static constexpr size_t kMaxRecent = 256;        // bounded; oldest dropped first
+		static constexpr size_t kMaxRecent = 256;         // bounded; oldest dropped first
 		static constexpr size_t kMaxDeliverQueue = 1024;  // bounded; prevents unbounded memory growth if worker stalls
 
 		// Drains the delivery queue and notifies subscribers off the publisher's thread.

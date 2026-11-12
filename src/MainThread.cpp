@@ -15,8 +15,8 @@ namespace
 	// PendingTasks) so /api/health can tell "task queue draining" from "starved" without a
 	// RunAndWait round-trip: g_lastTaskFrame is the engine frame when the most recent queued
 	// task finished ON the main thread; g_pendingTasks is queued-but-not-yet-finished.
-	std::atomic<int> g_lastTaskFrame{ -1 };
-	std::atomic<int> g_pendingTasks{ 0 };
+	std::atomic<int>             g_lastTaskFrame{ -1 };
+	std::atomic<int>             g_pendingTasks{ 0 };
 	std::atomic<std::thread::id> g_mainThreadId{};
 }
 

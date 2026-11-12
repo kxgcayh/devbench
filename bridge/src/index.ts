@@ -155,7 +155,11 @@ async function main(): Promise<void> {
               ok: false,
               reason: message,
               ...(e instanceof ToolResponseError && e.body.details
-                ? { error: e.body.error, code: e.body.code, details: e.body.details }
+                ? {
+                    error: e.body.error,
+                    code: e.body.code,
+                    details: e.body.details,
+                  }
                 : {}),
             }),
           },

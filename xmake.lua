@@ -139,10 +139,12 @@ before_build(function(target)
     local commit, dirty = "", -1
     local function git(args)
         local output
-        try {
-            function() output = os.iorunv("git", args) end,
-            catch { function() end },
-        }
+        try({
+            function()
+                output = os.iorunv("git", args)
+            end,
+            catch({ function() end }),
+        })
         return output
     end
     local root = git({ "rev-parse", "--show-toplevel" })
@@ -152,14 +154,22 @@ before_build(function(target)
             commit = revision:trim()
         end
         local changes = git({
-            "--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none",
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
         })
         if changes then
             dirty = changes:trim() == "" and 0 or 1
         end
     end
     local header = path.join(target:autogendir(), "build-info", "BuildInfo.h")
-    local content = '#pragma once\n\n#define DEVBENCH_GIT_COMMIT "' .. commit .. '"\n#define DEVBENCH_GIT_DIRTY ' .. dirty .. '\n'
+    local content = '#pragma once\n\n#define DEVBENCH_GIT_COMMIT "'
+        .. commit
+        .. '"\n#define DEVBENCH_GIT_DIRTY '
+        .. dirty
+        .. "\n"
     if not os.isfile(header) or io.readfile(header) ~= content then
         os.mkdir(path.directory(header))
         io.writefile(header, content)

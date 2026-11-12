@@ -298,10 +298,10 @@ TEST_CASE("input replay can be disabled without altering legacy steps")
 
 TEST_CASE("input replay disabled still normalizes atMs into wait timeline")
 {
-	const json steps = json::array({
+	const json   steps = json::array({
 		json{ { "atMs", 125 }, { "pose", json::array({ 1, 2, 3, 4, 5 }) }, { "wait", 25 } },
 	});
-	const json plan = InterleaveReplayableActivity(steps, json::array(), "recording:test", false);
+	const json   plan = InterleaveReplayableActivity(steps, json::array(), "recording:test", false);
 	std::int64_t totalWait = 0;
 	for (const auto& step : plan["steps"])
 		if (step.contains("wait"))

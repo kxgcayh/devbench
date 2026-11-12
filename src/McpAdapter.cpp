@@ -71,8 +71,7 @@ namespace dvb
 				json{
 					{ "level", "info" },
 					{ "logger", "devbench" },
-					{ "data", json{ { "topic", a_ev.topic }, { "seq", a_ev.seq }, { "data", a_ev.payload } } }
-				}));
+					{ "data", json{ { "topic", a_ev.topic }, { "seq", a_ev.seq }, { "data", a_ev.payload } } } }));
 		});
 	}
 }
