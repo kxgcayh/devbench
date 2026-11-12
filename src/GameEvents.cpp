@@ -45,6 +45,10 @@ namespace dvb
 							if (const auto menu = ui->GetMenu(name); menu.get())
 								flags = static_cast<std::uint32_t>(menu->menuFlags.get());
 					}
+					// The engine can send a second close for a menu that is already closed (seen live for
+					// oxygenMeter2 and Loading Menu). Only a close of a menu tracked as open reaches ModalWatch,
+					// otherwise the flag-less fallback would publish a stray modal.cleared.
+					bool wasOpen = a_event->opening;
 					{
 						std::lock_guard lock(g_menuMutex);
 						if (a_event->opening)
@@ -53,12 +57,14 @@ namespace dvb
 							// Closing: hand on the flags it opened with, so a menu that never blocked is not "cleared".
 							flags = it->second;
 							g_openMenus.erase(it);
+							wasOpen = true;
 						}
 					}
 					if (g_bus)
 						g_bus->Publish("menu", json{ { "name", name }, { "opening", a_event->opening } });
 					Recording::NoteMenuState(name, a_event->opening);
-					ModalWatch::OnMenuEvent(name, a_event->opening, flags);
+					if (wasOpen)
+						ModalWatch::OnMenuEvent(name, a_event->opening, flags);
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
