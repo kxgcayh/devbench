@@ -68,6 +68,47 @@ TEST_CASE("Only non-benign menus block, each with a hint")
 	CHECK(dvb::Modal::Blockers({ "HUD Menu", "Mist Menu", "LootMenu" }).empty());
 }
 
+TEST_CASE("A mod's HUD overlay with no blocking flag is not a blocker, a pausing menu is")
+{
+	using dvb::Modal::OpenMenu;
+	namespace M = dvb::Modal;
+	// The always-open overlays that used to be reported (BTPS, TrueHUD, SkyParkour, cast bars, oxygenMeter2)
+	// set none of pause / modal / cursor; a Journal Menu pauses and takes the cursor.
+	const std::vector<OpenMenu> open{
+		{ "TrueHUD", M::kFlagAlwaysOpen },
+		{ "CastingBar_Center", 0u },
+		{ "SkyParkour", M::kFlagAlwaysOpen },
+		{ "oxygenMeter2", 0u },
+		{ "Journal Menu", M::kFlagPausesGame | M::kFlagUsesCursor },
+		{ "HUD Menu", std::nullopt },
+	};
+	const auto blockers = M::BlockersOf(open);
+	CHECK(blockers.size() == 1 && blockers[0].name == "Journal Menu");
+	const auto hud = M::HudMenus(open);
+	CHECK((hud == std::vector<std::string>{ "CastingBar_Center", "HUD Menu", "SkyParkour", "TrueHUD", "oxygenMeter2" }));
+}
+
+TEST_CASE("Each blocking flag blocks alone, and always-open wins over cursor use")
+{
+	namespace M = dvb::Modal;
+	CHECK(M::IsBlocking("X", M::kFlagPausesGame));
+	CHECK(M::IsBlocking("X", M::kFlagModal));
+	CHECK(M::IsBlocking("X", M::kFlagUsesCursor));
+	CHECK(M::IsBlocking("X", M::kFlagFreezeFramePause));
+	CHECK(!M::IsBlocking("X", 0u));
+	CHECK(!M::IsBlocking("X", M::kFlagAlwaysOpen | M::kFlagUsesCursor));
+}
+
+TEST_CASE("Unreadable flags fall back to the name, and a message box blocks whatever its flags say")
+{
+	namespace M = dvb::Modal;
+	CHECK(M::IsBlocking("Some Mod Menu", std::nullopt));  // a real modal is never hidden by a failed read
+	CHECK(!M::IsBlocking("HUD Menu", std::nullopt));
+	CHECK(M::IsBlocking("MessageBoxMenu", 0u));
+	CHECK(M::IsBlocking("Loading Menu", M::kFlagAlwaysOpen));
+	CHECK(!M::IsBlocking("HUD Menu", M::kFlagPausesGame));  // vanilla benign names stay benign
+}
+
 TEST_CASE("A message box is never auto-dismissed")
 {
 	CHECK(dvb::Modal::CanAutoDismiss("Tutorial Menu"));

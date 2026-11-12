@@ -98,7 +98,7 @@ namespace dvb::ModalWatch
 	json CurrentFields()
 	{
 		json       out = json::object();
-		const auto blockers = Modal::Blockers(GetOpenMenus());
+		const auto blockers = Modal::BlockersOf(GetOpenMenuInfo());
 		if (!blockers.empty()) {
 			json list = json::array();
 			for (const auto& b : blockers)
@@ -108,6 +108,21 @@ namespace dvb::ModalWatch
 		if (auto notices = Notices::Global().Active(Notices::NowMs()); !notices.empty())
 			out["notices"] = Notices::ToJson(notices);
 		return out;
+	}
+
+	json MenuState()
+	{
+		const auto               open = GetOpenMenuInfo();
+		std::vector<std::string> names;
+		names.reserve(open.size());
+		for (const auto& m : open)
+			names.push_back(m.name);
+		std::sort(names.begin(), names.end());
+		return json{
+			{ "menusOpen", std::move(names) },
+			{ "hudMenus", Modal::HudMenus(open) },
+			{ "modalOpen", !Modal::BlockersOf(open).empty() },
+		};
 	}
 
 	void SetAutoDismiss(const std::vector<std::string>& a_names)
@@ -125,12 +140,13 @@ namespace dvb::ModalWatch
 		return { g_autoDismiss.begin(), g_autoDismiss.end() };
 	}
 
-	void OnMenuEvent(const std::string& a_name, bool a_opening)
+	void OnMenuEvent(const std::string& a_name, bool a_opening, std::optional<std::uint32_t> a_flags)
 	{
 		if (!g_events || Modal::IsBenign(a_name))
 			return;
 		if (!a_opening) {
-			if (Modal::Blockers(GetOpenMenus()).empty())
+			// Only a menu that raised modal.blocked clears it; a_flags are the ones it opened with.
+			if (Modal::IsBlocking(a_name, a_flags) && Modal::BlockersOf(GetOpenMenuInfo()).empty())
 				g_events->Publish("modal.cleared", json{ { "name", a_name } });
 			return;
 		}
@@ -139,7 +155,10 @@ namespace dvb::ModalWatch
 			std::lock_guard lock(g_mutex);
 			dismiss = g_autoDismiss.contains(a_name);
 		}
-		g_events->Publish("modal.blocked", json{ { "name", a_name }, { "hint", Modal::HintFor(a_name) }, { "autoDismiss", dismiss } });
+		// An overlay the flags say blocks nothing raises no modal event, but a menu the caller listed for
+		// auto-dismiss is still hidden: that list is an explicit instruction, not a guess.
+		if (Modal::IsBlocking(a_name, a_flags))
+			g_events->Publish("modal.blocked", json{ { "name", a_name }, { "hint", Modal::HintFor(a_name) }, { "autoDismiss", dismiss } });
 		if (!dismiss)
 			return;
 		if (auto* task = SKSE::GetTaskInterface())

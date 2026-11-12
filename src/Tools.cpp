@@ -1127,6 +1127,18 @@ namespace dvb
 			return j;
 		}
 
+		// The engine's god-mode switch (what console `tgm` flips): a global bool CommonLibSSE-NG exposes as the
+		// static PlayerCharacter::IsGodMode() (RELOCATION_ID(517711, 404238), include/RE/P/PlayerCharacter.h);
+		// it is not a bit of PlayerCharacter::playerFlags. Those IDs name the SE/AE addresses and nothing shows
+		// the VR address was ever checked, so VR reports null (unknown) rather than risk a failed relocation,
+		// which aborts the process. Main thread only, like every read here.
+		json GodModeJson()
+		{
+			if (REL::Module::IsVR())
+				return nullptr;
+			return RE::PlayerCharacter::IsGodMode();
+		}
+
 		// ---- lights: which NiLights hang under a reference's 3D, and whether the renderer uses them ----
 
 		// One read's limits: graph nodes visited, parent links walked (paths and owners), lights emitted.
@@ -1505,6 +1517,8 @@ namespace dvb
 					{ "pendingTasks", MainThread::PendingTasks() },
 				};
 				out.update(InstanceIdentity());  // pid, port, exe, vr
+				// menusOpen, hudMenus, modalOpen: read from the tracked set, so no main thread is needed.
+				out.update(ModalWatch::MenuState());
 				return out;
 			}
 
@@ -1513,13 +1527,16 @@ namespace dvb
 					auto*      pc = RE::PlayerCharacter::GetSingleton();
 					const bool loaded = pc && pc->Get3D() != nullptr;
 					const auto alwaysActive = BackgroundRun::AlwaysActive();
-					return json{
+					json       state{
 						{ "plugin", "devbench" },
 						{ "version", DEVBENCH_VERSION_STRING },
 						{ "playerLoaded", loaded },
 						{ "frame", game::CurrentFrame() },
 						{ "alwaysActive", alwaysActive ? json(*alwaysActive) : json(nullptr) },
 					};
+					if (loaded)
+						state["godMode"] = GodModeJson();
+					return state;
 				});
 				const bool focused = BackgroundRun::WindowFocused();
 				out["windowFocused"] = focused;
@@ -1530,6 +1547,7 @@ namespace dvb
 				// adjacent auto-iterated ports, a caller can confirm it's talking to the
 				// intended one instead of silently misattaching. Shared with /api/health.
 				out.update(InstanceIdentity());
+				out.update(ModalWatch::MenuState());
 				return out;
 			}
 
@@ -1630,6 +1648,7 @@ namespace dvb
 						return json{ { "playerLoaded", false } };
 					json j{
 						{ "playerLoaded", true },
+						{ "godMode", GodModeJson() },
 						{ "level", pc->GetLevel() },
 						{ "gold", pc->GetGoldAmount() },
 					};
@@ -1978,6 +1997,7 @@ namespace dvb
 				const bool        selected = a_args.value("selected", false);
 				const std::string typeFilter = a_args.value("formType", std::string{});
 				const std::string modelFilter = a_args.value("model", std::string{});
+				const std::string textFilter = a_args.value("filter", std::string{});
 				const double      radius = a_args.value("radius", 0.0);
 				const int         limit = InspectLimit(a_args, "refs");
 				if (radius < 0.0)
@@ -2010,6 +2030,7 @@ namespace dvb
 					// raw codes/prefixes still substring-match. Shared with 'inventory'.
 					std::string needle = FormTypeNeedle(typeFilter);
 					std::string modelNeedle = lower(modelFilter);
+					const auto  textNeedle = InspectLogic::LowerAscii(textFilter);
 					json        refs = json::array();
 					int         total = 0;
 					auto        cb = [&](RE::TESObjectREFR* r) {
@@ -2024,6 +2045,20 @@ namespace dvb
 								auto*       model = r->GetBaseObject() ? r->GetBaseObject()->As<RE::TESModel>() : nullptr;
 								const char* path = model ? model->GetModel() : nullptr;
 								if (!path || lower(std::string(path)).find(modelNeedle) == std::string::npos)
+									return RE::BSContainer::ForEachResult::kContinue;
+							}
+							if (!textNeedle.empty()) {
+								// Base editorId/name, model path, the ref's own editorId; before the count and the limit.
+								auto*       base = r->GetBaseObject();
+								auto*       model = base ? base->As<RE::TESModel>() : nullptr;
+								const char* baseEditorId = base ? base->GetFormEditorID() : nullptr;
+								const char* baseName = base ? base->GetName() : nullptr;
+								const char* modelPath = model ? model->GetModel() : nullptr;
+								const char* refEditorId = r->GetFormEditorID();
+								// GetDisplayFullName falls back to the base object's name, so skip it for a ref with none.
+								const char* refName = base ? r->GetDisplayFullName() : nullptr;
+								auto        view = [](const char* s) { return std::string_view(s ? s : ""); };
+								if (!InspectLogic::MatchesAnyFilter(textNeedle, { view(baseEditorId), view(baseName), view(modelPath), view(refEditorId), view(refName) }))
 									return RE::BSContainer::ForEachResult::kContinue;
 							}
 							++total;
@@ -2495,9 +2530,8 @@ namespace dvb
 				// A pausing menu froze the frame counter → RunAndWait 504; that IS blocked. Name it from
 				// the tracked set instead (no marshal); "<paused>" if only benign names remain.
 				std::vector<std::string> out;
-				for (const auto& n : GetOpenMenus())
-					if (n != "HUD Menu" && n != "Cursor Menu" && n != RE::Console::MENU_NAME)
-						out.push_back(n);
+				for (const auto& b : Modal::BlockersOf(GetOpenMenuInfo()))
+					out.push_back(b.name);
 				if (out.empty())
 					out.emplace_back("<paused>");
 				return out;
@@ -3165,15 +3199,18 @@ namespace dvb
 				"Read live game/plugin state. Runs on the main thread and returns the value "
 				"synchronously (times out if the game is mid-load / not pumping tasks). kinds: "
 				"'state' → { plugin, version, vr, playerLoaded, frame, pid, port, exe, windowFocused, alwaysActive "
-				"(null when unavailable), warning? } — warning appears when the window is in the background with "
-				"bAlwaysActive off, which pauses the engine; pid/port/exe "
+				"(null when unavailable), godMode (console tgm; only with a player; null on VR, where the address is unverified), "
+				"menusOpen, hudMenus, modalOpen, warning? } — warning appears when the window is in the background with "
+				"bAlwaysActive off, which pauses the engine; menusOpen lists every open menu, hudMenus the ones that block "
+				"nothing (HUD overlays: always-open, no pause/modal/cursor), and modalOpen is true when any other menu is open "
+				"(a frame-rate reading taken then is not valid; 'health' carries the same three off-thread); pid/port/exe "
 				"identify the answering instance, so a multi-instance session (e.g. SE + VR both "
 				"running, on adjacent auto-iterated ports) can confirm it's talking to the intended "
 				"one; 'vm' → Papyrus VM health "
 				"{ loadedTypes, attachedScripts, arrays, runningStacks, frozenStacks, overstressed }; "
 				"'scene' → player context { cell, worldspace, location, position, gameHour, daysPassed, "
 				"weather }; 'mods' → active load order { count, lightCount, total, plugins:[{index, name}], "
-				"lightPlugins:[…] }; 'player' → player snapshot { name, level, sex, gold, race, "
+				"lightPlugins:[…] }; 'player' → player snapshot { godMode (the engine's god-mode switch that console tgm flips; null on VR), name, level, sex, gold, race, "
 				"actorValues:{health,magicka,stamina,carryWeight each {current,max}}, equipped:{right,left,ammo}, "
 				"hands:{weaponDrawn (broad: drawn or about to sheathe), weaponState, weaponSettledDrawn (exactly drawn), "
 				"castingArtReady (every spell hand's caster flags its art attached; says nothing about which art), "
@@ -3211,6 +3248,8 @@ namespace dvb
 				"display name; pass 'formId' for one form, 'selected'=true for the "
 				"console/crosshair ref (set via prid), or neither to enumerate loaded refs in the grid "
 				"(optional 'formType' filter, 'model' substring filter against the base object's mesh path, "
+				"'filter' case-insensitive substring over the base object's editorId or name, its mesh path, and the ref's "
+				"own editorId or name, applied before 'limit' so count and truncated describe the matches, "
 				"'radius' from player, 'limit' default 100); 'model' matches statics and furniture — "
 				"actors normally have no base mesh, so list NPCs with 'formType'=Actor. "
 				"'draws' → what the frames since the counting window began drew, per frame: { frames, seconds, fps, "
@@ -3253,6 +3292,7 @@ namespace dvb
 									{ "scope", json{ { "type", "string" }, { "enum", json::array({ "ref", "scene" }) }, { "description", "lights: 'ref' (default) reads one reference's 3D; 'scene' lists every light the renderer is using, nearest the player first, each with the reference it hangs under; any other value is refused (400)" } } },
 									{ "formType", json{ { "type", "string" }, { "description", "refs/inventory: keep only entries whose type matches (e.g. Actor, Weapon, Potion)" } } },
 									{ "model", json{ { "type", "string" }, { "description", "refs enumerate: keep only refs whose base object's mesh path contains this substring (case-insensitive, e.g. 'wrcity01'); matches statics and furniture, not actors" } } },
+									{ "filter", json{ { "type", "string" }, { "description", "refs enumerate: keep only refs where this text (case-insensitive substring) appears in the base object's editorId or name, its mesh path, or the ref's own editorId or name; applied before 'limit', so count/truncated describe the matches (e.g. 'bed'); combines with formType, model and radius" } } },
 									{ "radius", json{ { "type", "number" }, { "description", "refs enumerate: only refs within this distance of the player (0 = whole loaded grid); lights scope=scene: only lights within it (0 = no limit)" } } },
 									{ "limit", json{ { "type", "integer" }, { "description", "refs/inventory/lights: max entries to return (default 100; lights: lights emitted, 0..50000)" } } },
 									{ "reset", json{ { "type", "boolean" }, { "description", "draws: begin a new counting window after this reading" } } },

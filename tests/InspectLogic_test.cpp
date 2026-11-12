@@ -104,3 +104,35 @@ TEST_CASE("a background warning needs an unfocused window with bAlwaysActive kno
 	CHECK(BackgroundWarning(false, std::nullopt).empty());
 	CHECK(!BackgroundWarning(false, false).empty());
 }
+
+TEST_CASE("refs filter matches any candidate, ignoring case, and an empty needle matches all")
+{
+	// 'bed' must find a bed by its editorId, its display name or its mesh path, however the game cased them.
+	CHECK(MatchesAnyFilter("bed", { "NordBedDouble01", "", "", "", "" }));
+	CHECK(MatchesAnyFilter("bed", { "", "Bedroll", "", "", "" }));
+	CHECK(MatchesAnyFilter("bed", { "", "", "Furniture\\Bed\\BedDouble.nif", "", "" }));
+	CHECK(MatchesAnyFilter("bed", { "", "", "", "MyBedRef", "" }));
+	CHECK(MatchesAnyFilter("bed", { "", "", "", "", "Innkeeper's BED" }));
+	CHECK(MatchesAnyFilter("", { "", "", "", "", "" }));
+}
+
+TEST_CASE("refs filter ignores the needle's case too, so a caller cannot get a miss by forgetting to lower it")
+{
+	CHECK(MatchesAnyFilter("BED", { "", "Bedroll", "", "", "" }));
+	CHECK(MatchesAnyFilter("BeD", { "NORDBEDDOUBLE01", "", "", "", "" }));
+	CHECK(!MatchesAnyFilter("CHAIR", { "NordBedDouble01", "Bedroll", "", "", "" }));
+}
+
+TEST_CASE("refs filter rejects a ref none of whose fields contain the text")
+{
+	// Without this the 863-ref cell comes back whole when 'filter' is 'bed'.
+	CHECK(!MatchesAnyFilter("bed", { "WoodenChair", "Chair", "Furniture\\Chair.nif", "", "" }));
+	CHECK(!MatchesAnyFilter("bed", { "", "", "", "", "" }));
+	CHECK(!MatchesAnyFilter("bed", {}));
+}
+
+TEST_CASE("LowerAscii folds ASCII only and leaves other bytes alone")
+{
+	CHECK(LowerAscii("NordBED_01") == "nordbed_01");
+	CHECK(LowerAscii("\xC3\x89") == "\xC3\x89");
+}

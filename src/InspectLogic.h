@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -108,4 +109,14 @@ namespace dvb::InspectLogic
 	/// Why tools that need frames may stall: the game window is in the background and the engine is not
 	/// set to keep running there. Empty when nothing is wrong or bAlwaysActive could not be read.
 	std::string BackgroundWarning(bool a_focused, std::optional<bool> a_alwaysActive);
+
+	/// ASCII lower-casing, the comparison 'refs' filters use (a plain tolower per byte, so a UTF-8 name never
+	/// gets a locale-dependent fold).
+	std::string LowerAscii(std::string_view a_text);
+
+	/// 'refs' filter: true if the needle is empty (no filter) or a substring of any candidate, ASCII
+	/// case-insensitive on both sides and without allocating. Candidates are a reference's base editorId and
+	/// name, model path and its own editorId and name; null or empty ones are passed as empty views and never
+	/// match a non-empty needle.
+	bool MatchesAnyFilter(std::string_view a_needle, std::initializer_list<std::string_view> a_candidates);
 }

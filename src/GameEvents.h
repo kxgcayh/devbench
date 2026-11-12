@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ModalLogic.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -12,6 +14,10 @@ namespace dvb
 	/// `menu` tool detect blocking modals (e.g. "MessageBoxMenu") without touching the
 	/// UI on the listener thread. Thread-safe.
 	std::vector<std::string> GetOpenMenus();
+
+	/// The same set with each menu's engine flags, read once on open (nullopt if the menu object was not
+	/// readable then). Thread-safe, never touches the UI. Feeds the blocking classification in ModalLogic.h.
+	std::vector<Modal::OpenMenu> GetOpenMenuInfo();
 
 	/// Install game event sources that publish into `a_bus`:
 	///  - a MenuOpenCloseEvent sink → "menu" events { name, opening } (loading screens,

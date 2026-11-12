@@ -59,3 +59,12 @@ def test_inspect_health_kind_mirrors_rest(base_url, client):
         assert isinstance(kind.get(key), int) and not isinstance(kind[key], bool), (key, kind.get(key))
     assert kind["pendingTasks"] >= 0, kind
     assert "lastLifecycle" not in kind, "inspect health is MCP-facing; lastLifecycle is REST-only"
+
+
+def test_health_reports_open_menus(base_url):
+    """menusOpen/hudMenus/modalOpen come from the tracked set, so they are present even mid-stall."""
+    body = _health(base_url)
+    assert isinstance(body.get("menusOpen"), list), body
+    assert isinstance(body.get("hudMenus"), list), body
+    assert isinstance(body.get("modalOpen"), bool), body
+    assert set(body["hudMenus"]) <= set(body["menusOpen"]), body

@@ -122,6 +122,40 @@ def test_refs_model_filter(client, inspect):
 
 
 @pytest.mark.requires_player
+def test_refs_text_filter_applies_before_limit(client, inspect):
+    """`filter` narrows by base/ref editorId or name and model path, case-insensitively, before `limit`."""
+    require_enum(inspect, "kind", "refs")
+    props = inspect.get("inputSchema", {}).get("properties", {})
+    if "filter" not in props:
+        pytest.skip("this build's inspect schema does not advertise 'filter'")
+    unfiltered = client.ok("inspect", {"kind": "refs", "radius": 5000, "limit": 200})
+    sample = next((r for r in unfiltered.get("refs", []) if r.get("model")), None)
+    if sample is None:
+        pytest.skip("no ref with a mesh path in range to filter on")
+    needle = sample["model"].split("\\")[-1].split(".")[0][:5]
+    body = client.ok("inspect", {"kind": "refs", "radius": 5000, "filter": needle.upper(), "limit": 1})
+    # limit=1 truncates the reply, but count is the number of matches, so it can only be right if the
+    # filter ran first: a filter applied to the returned page would report count == the whole cell.
+    assert 1 <= body["count"] <= unfiltered["count"], body
+    assert body["returned"] == 1 and body["truncated"] is (body["count"] > 1), body
+    low = needle.lower()
+    ref = body["refs"][0]
+    haystack = " ".join(
+        str(x or "")
+        for x in (
+            ref.get("model"),
+            ref.get("name"),
+            ref.get("editorId"),
+            (ref.get("base") or {}).get("name"),
+            (ref.get("base") or {}).get("editorId"),
+        )
+    ).lower()
+    assert low in haystack, (needle, ref)
+    nothing = client.ok("inspect", {"kind": "refs", "radius": 5000, "filter": "zz_no_such_ref_zz"})
+    assert nothing["count"] == 0 and nothing["refs"] == [], nothing
+
+
+@pytest.mark.requires_player
 def test_refs_actors_in_radius(client, inspect):
     require_enum(inspect, "kind", "refs")
     body = client.ok(
@@ -183,6 +217,8 @@ def test_player(client, inspect):
     assert body.get("playerLoaded") is True, body
     assert isinstance(body.get("level"), int), body
     assert _is_number(body.get("gold")), body
+    # null on VR (address unverified there); a bool everywhere else
+    assert body.get("godMode") is None or isinstance(body["godMode"], bool), body
 
     avs = body.get("actorValues")
     assert isinstance(avs, dict), body
@@ -297,3 +333,42 @@ def test_unknown_kind_400(client, inspect):
     status, body = client.call("inspect", {"kind": "NoSuchKindXYZ"})
     assert status == 400, (status, body)
     assert isinstance(body, dict) and "error" in body, body
+
+
+@pytest.mark.requires_player
+def test_god_mode_reads_back_console_tgm(client, inspect):
+    """Console `tgm` flips the switch; `inspect kind=player` and `state` must read it back."""
+    before = client.ok("inspect", {"kind": "player"}).get("godMode")
+    if before is None:
+        pytest.skip("godMode is null on this runtime (VR)")
+    try:
+        client.ok("console", {"action": "exec", "command": "tgm"})
+        after = client.ok("inspect", {"kind": "player"})["godMode"]
+        assert after is (not before), (before, after)
+        assert client.ok("inspect", {"kind": "state"})["godMode"] is after
+    finally:
+        now = client.ok("inspect", {"kind": "player"}).get("godMode")
+        if now is not before:
+            client.ok("console", {"action": "exec", "command": "tgm"})
+
+
+def test_state_and_health_report_menus(client, inspect):
+    """menusOpen / hudMenus / modalOpen on both kinds; modalOpen agrees with blockedBy."""
+    for kind in ("state", "health"):
+        body = client.ok("inspect", {"kind": kind})
+        assert isinstance(body.get("menusOpen"), list), (kind, body)
+        assert isinstance(body.get("hudMenus"), list), (kind, body)
+        assert isinstance(body.get("modalOpen"), bool), (kind, body)
+        assert set(body["hudMenus"]) <= set(body["menusOpen"]), (kind, body)
+        assert ("blockedBy" in body) == body["modalOpen"], (kind, body)
+        if not body["modalOpen"]:
+            assert set(body["hudMenus"]) == set(body["menusOpen"]), (kind, body)
+
+
+@pytest.mark.requires_player
+def test_hud_overlays_are_not_blockers(client, inspect):
+    """Always-open overlays (HUD Menu, TrueHUD, cast bars, ...) must not appear under blockedBy."""
+    body = client.ok("inspect", {"kind": "state"})
+    if body["modalOpen"]:
+        pytest.skip("a blocking menu is open; this check needs a clear HUD-only state")
+    assert "blockedBy" not in body, body

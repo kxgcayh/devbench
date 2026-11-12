@@ -4,6 +4,7 @@
 #include "GameState.h"  // game::CurrentFrame
 #include "Json.h"
 #include "MainThread.h"  // LastCompletedFrame / PendingTasks
+#include "ModalWatch.h"  // MenuState
 #include "Server.h"      // InstanceIdentity
 #include "ToolRegistry.h"
 
@@ -116,6 +117,8 @@ namespace dvb
 				{ "pendingTasks", MainThread::PendingTasks() },
 			};
 			body.update(InstanceIdentity());  // pid, port, exe, vr
+			// menusOpen, hudMenus, modalOpen: read from the tracked set, so no main thread is needed.
+			body.update(ModalWatch::MenuState());
 			WriteJson(res, 200, body);
 		});
 

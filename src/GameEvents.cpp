@@ -9,7 +9,7 @@
 #include <cmath>
 #include <format>
 #include <mutex>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace dvb
 {
@@ -17,8 +17,15 @@ namespace dvb
 	{
 		EventBus* g_bus = nullptr;
 
-		std::mutex                      g_menuMutex;
-		std::unordered_set<std::string> g_openMenus;  // live set, updated from the sink
+		// The bits ModalLogic.h mirrors must stay the engine's.
+		static_assert(static_cast<std::uint32_t>(RE::UI_MENU_FLAGS::kPausesGame) == Modal::kFlagPausesGame);
+		static_assert(static_cast<std::uint32_t>(RE::UI_MENU_FLAGS::kAlwaysOpen) == Modal::kFlagAlwaysOpen);
+		static_assert(static_cast<std::uint32_t>(RE::UI_MENU_FLAGS::kUsesCursor) == Modal::kFlagUsesCursor);
+		static_assert(static_cast<std::uint32_t>(RE::UI_MENU_FLAGS::kModal) == Modal::kFlagModal);
+		static_assert(static_cast<std::uint32_t>(RE::UI_MENU_FLAGS::kFreezeFramePause) == Modal::kFlagFreezeFramePause);
+
+		std::mutex                                                    g_menuMutex;
+		std::unordered_map<std::string, std::optional<std::uint32_t>> g_openMenus;  // live set (name -> flags), updated from the sink
 
 		// Sink for menu open/close — covers loading screens, the main menu, and the
 		// new-game message boxes / RaceSex menu that block automated flows.
@@ -30,17 +37,28 @@ namespace dvb
 			{
 				if (a_event) {
 					const std::string name = a_event->menuName.c_str();
+					// The sink runs on the main thread, where the menu object may be read; replies are built
+					// off it and only ever see this snapshot. A menu's flags are set when it is created.
+					std::optional<std::uint32_t> flags;
+					if (a_event->opening) {
+						if (auto* ui = RE::UI::GetSingleton())
+							if (const auto menu = ui->GetMenu(name); menu.get())
+								flags = static_cast<std::uint32_t>(menu->menuFlags.get());
+					}
 					{
 						std::lock_guard lock(g_menuMutex);
 						if (a_event->opening)
-							g_openMenus.insert(name);
-						else
-							g_openMenus.erase(name);
+							g_openMenus[name] = flags;
+						else if (const auto it = g_openMenus.find(name); it != g_openMenus.end()) {
+							// Closing: hand on the flags it opened with, so a menu that never blocked is not "cleared".
+							flags = it->second;
+							g_openMenus.erase(it);
+						}
 					}
 					if (g_bus)
 						g_bus->Publish("menu", json{ { "name", name }, { "opening", a_event->opening } });
 					Recording::NoteMenuState(name, a_event->opening);
-					ModalWatch::OnMenuEvent(name, a_event->opening);
+					ModalWatch::OnMenuEvent(name, a_event->opening, flags);
 				}
 				return RE::BSEventNotifyControl::kContinue;
 			}
@@ -157,6 +175,20 @@ namespace dvb
 	std::vector<std::string> GetOpenMenus()
 	{
 		std::lock_guard<std::mutex> lock(g_menuMutex);
-		return { g_openMenus.begin(), g_openMenus.end() };
+		std::vector<std::string>    out;
+		out.reserve(g_openMenus.size());
+		for (const auto& entry : g_openMenus)
+			out.push_back(entry.first);
+		return out;
+	}
+
+	std::vector<Modal::OpenMenu> GetOpenMenuInfo()
+	{
+		std::lock_guard<std::mutex>  lock(g_menuMutex);
+		std::vector<Modal::OpenMenu> out;
+		out.reserve(g_openMenus.size());
+		for (const auto& entry : g_openMenus)
+			out.push_back({ entry.first, entry.second });
+		return out;
 	}
 }

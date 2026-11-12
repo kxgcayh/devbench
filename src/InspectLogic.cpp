@@ -64,4 +64,26 @@ namespace dvb::InspectLogic
 		return "the game window is in the background and bAlwaysActive is off, so the engine pauses; "
 			   "run game setAlwaysActive or set [General] bAlwaysActive=1";
 	}
+
+	std::string LowerAscii(std::string_view a_text)
+	{
+		std::string out(a_text);
+		for (auto& c : out)
+			if (c >= 'A' && c <= 'Z')
+				c = static_cast<char>(c - 'A' + 'a');
+		return out;
+	}
+
+	bool MatchesAnyFilter(std::string_view a_needle, std::initializer_list<std::string_view> a_candidates)
+	{
+		if (a_needle.empty())
+			return true;
+		// Folds each byte as it compares, so no per-candidate string is built (this runs once per reference
+		// on the main thread) and the needle's case does not matter either.
+		const auto fold = [](char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; };
+		for (const auto candidate : a_candidates)
+			if (std::search(candidate.begin(), candidate.end(), a_needle.begin(), a_needle.end(), [&](char a, char b) { return fold(a) == fold(b); }) != candidate.end())
+				return true;
+		return false;
+	}
 }
